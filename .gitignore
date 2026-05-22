@@ -1,0 +1,9 @@
+data/
+*.tar
+*.tar.gz
+*.tar.bz2
+*.zip
+*.pdf
+*.txt
+.DS_Store
+.idea/
