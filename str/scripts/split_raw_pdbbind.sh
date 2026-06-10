@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(pwd)}"
 IID="${IID:-false}"
+SPLIT_NAME="${SPLIT_NAME:-split}"
 
 INDEX_PATH="${INDEX_PATH:-data/raw/pdbbind2020/index/index/INDEX_general_PL.2020R1.lst}"
 COMPLEX_ROOT="${COMPLEX_ROOT:-data/raw/pdbbind2020/complexes/P-L}"
@@ -23,6 +24,8 @@ Usage: bash str/scripts/split_raw_pdbbind.sh [options]
 Options:
   --iid true|false            true: random PDB-complex split; false: sequence-similarity-constrained PDB-complex split.
                               Overrides the IID environment variable.
+  --split-name NAME           Name of the processed split output under data/processed/NAME.
+                              Must be a single directory name, not a path. Overrides SPLIT_NAME.
   --index-path PATH           PDBbind INDEX_general_PL file.
   --complex-root PATH         PDBbind P-L complex root.
   --source-split-dir PATH     Source Interformer split directory for ratios/subset files.
@@ -64,6 +67,11 @@ while [[ $# -gt 0 ]]; do
     --index-path)
       require_arg_value "$1" "${2:-}"
       INDEX_PATH="$2"
+      shift 2
+      ;;
+    --split-name)
+      require_arg_value "$1" "${2:-}"
+      SPLIT_NAME="$2"
       shift 2
       ;;
     --complex-root)
@@ -145,12 +153,16 @@ fi
 
 if [[ "${IID_MODE}" == "true" ]]; then
   DEFAULT_OUTPUT_SPLIT_DIR="str/split_iid_all_raw"
-  DEFAULT_OUTPUT_DIR="data/processed/iid_split_all_raw"
 else
   DEFAULT_OUTPUT_SPLIT_DIR="str/split_sequence_cluster_all_raw"
-  DEFAULT_OUTPUT_DIR="data/processed/sequence_cluster_split_all_raw"
 fi
 
+if [[ ! "${SPLIT_NAME}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "Invalid SPLIT_NAME: ${SPLIT_NAME}. Use a single directory name with letters, numbers, dot, underscore, or hyphen." >&2
+  exit 2
+fi
+
+DEFAULT_OUTPUT_DIR="data/processed/${SPLIT_NAME}"
 OUTPUT_SPLIT_DIR="${OUTPUT_SPLIT_DIR_ARG:-${OUTPUT_SPLIT_DIR:-${DEFAULT_OUTPUT_SPLIT_DIR}}}"
 OUTPUT_DIR="${OUTPUT_DIR_ARG:-${OUTPUT_DIR:-${DEFAULT_OUTPUT_DIR}}}"
 ASSIGNED_CSV="${ASSIGNED_CSV:-${OUTPUT_DIR}/pdbbind_sequence_cluster_splits.csv}"
@@ -162,6 +174,7 @@ export PYTHONPATH="${ROOT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 echo "Raw PDBbind split pipeline"
 echo "ROOT_DIR=${ROOT_DIR}"
 echo "IID=${IID_MODE}"
+echo "SPLIT_NAME=${SPLIT_NAME}"
 echo "INDEX_PATH=${INDEX_PATH}"
 echo "COMPLEX_ROOT=${COMPLEX_ROOT}"
 echo "SOURCE_SPLIT_DIR=${SOURCE_SPLIT_DIR}"
