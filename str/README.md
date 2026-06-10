@@ -8,6 +8,11 @@
 
 ```text
 final_project/
+├── scripts/
+│   ├── create_sequence_cluster_split.py
+│   ├── sequence_leakage_check.py
+│   ├── create_interformer_splits.py
+│   └── data_inspection.py
 ├── str/
 │   ├── README.md
 │   ├── requirements.txt
@@ -19,7 +24,8 @@ final_project/
 │   │       ├── create_trainable_manifest.py
 │   │       ├── cache_ligand_graphs.py
 │   │       ├── smoke_test_graph_batch.py
-│   │       └── cache_esm_embeddings.py
+│   │       ├── cache_esm_embeddings.py
+│   │       └── build_training_batch.py
 │   ├── split_sequence_cluster_all_raw/
 │   │   ├── timesplit_no_lig_overlap_train
 │   │   ├── timesplit_no_lig_overlap_val
@@ -36,14 +42,22 @@ final_project/
 │       ├── esm_affinity_graph_batch_smoke_report.json
 │       ├── esm_affinity_graph_batch_smoke_valid_report.json
 │       ├── esm_affinity_graph_batch_smoke_test_report.json
+│       ├── esm_ligand_training_batch_debug_report.json
+│       ├── esm_ligand_training_batch_report.json
 │       └── cache/
 │           ├── ligand_graphs/
 │           ├── ligand_graphs_report.json
 │           ├── esm_embeddings_debug/
 │           └── esm_embeddings_report_debug.json
 └── data/
-    └── raw/
-        └── pdbbind2020/
+    ├── raw/
+    │   └── pdbbind2020/
+    └── processed/
+        └── sequence_cluster_split_validation/
+            └── all_raw/
+                ├── pdbbind_sequence_cluster_split_table.csv
+                ├── pdbbind_sequence_cluster_split_table_report.json
+                └── final_validation_summary.json
 ```
 
 依赖文件：
@@ -112,7 +126,20 @@ pAffinity = -log10(affinity in mol/L)
 
 ### 2.2 数据划分
 
-当前使用 `str/split_sequence_cluster_all_raw/`，保持 Interformer split 文件格式：
+当前使用 `str/split_sequence_cluster_all_raw/`。这里的切分对象是 **PDBbind complex / PDB ID 级别的结构样本**，不是单独切分蛋白链、ligand、embedding 或表格行。
+
+每个 PDB ID 对应一组结构文件：
+
+```text
+{pdb_id}_protein.pdb
+{pdb_id}_pocket.pdb
+{pdb_id}_ligand.sdf
+{pdb_id}_ligand.mol2
+```
+
+这组文件必须整体进入同一个 split。实际训练时不需要把结构文件物理复制成 train/valid/test 三个目录；split 文件保存的是 PDB ID，后续 manifest 会把每个 PDB ID 解析回原始结构路径。
+
+split 文件保持 Interformer 格式：
 
 ```text
 timesplit_no_lig_overlap_train
@@ -120,7 +147,18 @@ timesplit_no_lig_overlap_val
 timesplit_test
 ```
 
-该 split 已通过序列泄漏检查：
+切分方法是：
+
+```text
+1. 从每个 PDB complex 的 *_protein.pdb 中抽取 chain sequence
+2. 用 MMseqs2 做 chain-level all-vs-all 相似性搜索
+3. 如果两个 chain 满足 identity >= 40% 且 coverage >= 0.8，则把它们所在的 PDB complex 连接到同一个 component
+4. 在 component 级别分配 train / valid / test
+5. 输出 PDB ID 列表形式的 Interformer-compatible split 文件
+6. 再独立验证跨 split 是否存在 identity >= 40% 且 coverage >= 0.8 的命中
+```
+
+因此，sequence similarity 是约束条件，最终被切分的是 PDB 结构样本。当前 split 已通过序列泄漏检查：
 
 ```text
 identity >= 40%
@@ -198,6 +236,228 @@ Spearman
 ## 3. 当前已完成部分的使用方法
 
 以下命令默认在仓库根目录运行。
+
+### 3.0 Linux 服务器从切分数据复现到当前阶段
+
+服务器上的项目目录假设为：
+
+```text
+/tmp/ai4s/ai4s_final/
+```
+
+当前阶段需要以下输入已经存在：
+
+```text
+data/raw/pdbbind2020/
+data/processed/sequence_cluster_split_validation/all_raw/pdbbind_sequence_cluster_split_table.csv
+str/split_sequence_cluster_all_raw/
+```
+
+其中：
+
+```text
+data/raw/pdbbind2020/
+```
+
+来自 PDBbind 原始数据，包含 `index/index/INDEX_general_PL.2020R1.lst` 和 `complexes/P-L/` 下的 protein、pocket、ligand 文件。
+
+```text
+str/split_sequence_cluster_all_raw/
+```
+
+是当前项目使用的 sequence-cluster split，至少应包含：
+
+```text
+timesplit_no_lig_overlap_train
+timesplit_no_lig_overlap_val
+timesplit_test
+```
+
+```text
+data/processed/sequence_cluster_split_validation/all_raw/pdbbind_sequence_cluster_split_table.csv
+```
+
+是切分验证后生成的中间表，`create_esm_manifest.py` 默认从该表读取路径、标签、split 元信息，再生成训练 manifest。该文件不属于 PDBbind 官方原始数据；如果服务器上没有，需要从本地同步或重新运行 sequence-cluster split 生成流程。
+
+#### 3.0.1 重新生成 PDB 结构级 split
+
+如果服务器上还没有 `str/split_sequence_cluster_all_raw/`，需要先从 PDBbind 原始结构生成 PDB ID 级 split。输入是：
+
+```text
+data/raw/pdbbind2020/index/index/INDEX_general_PL.2020R1.lst
+data/raw/pdbbind2020/complexes/P-L/
+split/
+```
+
+其中 `split/` 是原 Interformer split 文件目录，用于提供目标 train/valid/test 比例和辅助评估列表。生成 all-raw PDB 结构级 split：
+
+```bash
+python scripts/create_sequence_cluster_split.py \
+  --index-path data/raw/pdbbind2020/index/index/INDEX_general_PL.2020R1.lst \
+  --complex-root data/raw/pdbbind2020/complexes/P-L \
+  --source-split-dir split \
+  --output-split-dir split_sequence_cluster_all_raw \
+  --output-dir data/processed/sequence_cluster_split_all_raw \
+  --universe all_raw \
+  --min-seq-id 0.4 \
+  --coverage 0.8 \
+  --min-length 30 \
+  --seeds 256
+```
+
+该步骤会输出：
+
+```text
+split_sequence_cluster_all_raw/
+├── timesplit_no_lig_overlap_train
+├── timesplit_no_lig_overlap_val
+├── timesplit_test
+├── coresetlist
+├── diff_test+core
+├── posebusters_pdb_ccd_ids.txt
+├── timesplit_test_no_rec_overlap
+└── timesplit_test_sanitizable
+
+data/processed/sequence_cluster_split_all_raw/
+├── chain_sequences.csv
+├── pdbbind_seqid_40_all_vs_all.m8
+├── pdbbind_sequence_cluster_splits.csv
+├── sequence_component_assignments.csv
+├── cross_split_sequence_violations.csv
+└── sequence_cluster_split_report.json
+```
+
+当前 `str` 方案默认读取 `str/split_sequence_cluster_all_raw/`，因此生成后需要复制一份到 `str/` 下：
+
+```bash
+mkdir -p str/split_sequence_cluster_all_raw
+cp split_sequence_cluster_all_raw/* str/split_sequence_cluster_all_raw/
+```
+
+当前已验证的结构级 split 结果：
+
+```text
+train: 17608
+valid: 1038
+test: 391
+cross_split_violation_count: 0
+leakage_detected: false
+```
+
+注意：这里没有把 `data/raw/pdbbind2020/complexes/P-L/` 下的结构文件物理拆成三个目录。切分结果是 PDB ID 列表；manifest 会将 PDB ID 映射回原始结构文件路径，保证同一个 PDB complex 的 protein、pocket、ligand 始终作为一个整体进入同一个 split。
+
+如果需要生成 `create_esm_manifest.py` 默认使用的中间表，应保留或同步：
+
+```text
+data/processed/sequence_cluster_split_validation/all_raw/pdbbind_sequence_cluster_split_table.csv
+```
+
+该表记录每个 PDB ID 的 split、结构文件路径、亲和力标签和验证结果，是从结构级 split 到训练 manifest 的桥接文件。
+
+如果需要从本地同步这些切分相关文件到服务器，可在本地仓库根目录执行：
+
+```bash
+rsync -avh --progress --partial \
+  -e "ssh -p 10731" \
+  str/split_sequence_cluster_all_raw/ \
+  root@connect.bjb2.seetacloud.com:/tmp/ai4s/ai4s_final/str/split_sequence_cluster_all_raw/
+
+rsync -avh --progress --partial \
+  -e "ssh -p 10731" \
+  data/processed/sequence_cluster_split_validation/all_raw/ \
+  root@connect.bjb2.seetacloud.com:/tmp/ai4s/ai4s_final/data/processed/sequence_cluster_split_validation/all_raw/
+```
+
+服务器上先检查关键输入：
+
+```bash
+cd /tmp/ai4s/ai4s_final
+
+test -f data/raw/pdbbind2020/index/index/INDEX_general_PL.2020R1.lst
+test -d data/raw/pdbbind2020/complexes/P-L
+test -f data/processed/sequence_cluster_split_validation/all_raw/pdbbind_sequence_cluster_split_table.csv
+test -f str/split_sequence_cluster_all_raw/timesplit_no_lig_overlap_train
+test -f str/split_sequence_cluster_all_raw/timesplit_no_lig_overlap_val
+test -f str/split_sequence_cluster_all_raw/timesplit_test
+```
+
+安装依赖时，如果 PyTorch 已由云服务器镜像预装，可先安装其余依赖；若 pip 源只指向 PyTorch CUDA 源，需要显式指定 PyPI 或镜像源：
+
+```bash
+python -m pip install -r str/requirements.txt \
+  -i https://pypi.org/simple \
+  --extra-index-url https://download.pytorch.org/whl/cu128
+```
+
+从切分数据开始，到当前阶段的完整执行顺序如下：
+
+```bash
+# 1. 由 sequence-cluster split 和中间表生成完整 manifest
+python str/scripts/data/create_esm_manifest.py \
+  --split-dir str/split_sequence_cluster_all_raw
+
+# 2. 验证 manifest 的标签、路径、split 一致性
+python str/scripts/data/validate_manifest.py \
+  --split-dir str/split_sequence_cluster_all_raw \
+  --ligand-parse-limit 0
+
+# 3. 全量验证 ligand 是否可被 RDKit 解析
+python str/scripts/data/validate_manifest.py \
+  --split-dir str/split_sequence_cluster_all_raw \
+  --ligand-parse-limit -1
+
+# 4. 过滤 4 个不可构图 ligand，生成可训练 manifest
+python str/scripts/data/create_trainable_manifest.py
+
+# 5. 缓存 ligand graph
+python str/scripts/data/cache_ligand_graphs.py
+
+# 6. 验证 ligand graph batch
+python str/scripts/data/smoke_test_graph_batch.py --split train --batch-size 8
+python str/scripts/data/smoke_test_graph_batch.py --split valid --batch-size 8 \
+  --report-json str/manifest/esm_affinity_graph_batch_smoke_valid_report.json
+python str/scripts/data/smoke_test_graph_batch.py --split test --batch-size 8 \
+  --report-json str/manifest/esm_affinity_graph_batch_smoke_test_report.json
+
+# 7. 在 Linux GPU 上缓存 ESM residue embedding
+python str/scripts/data/cache_esm_embeddings.py \
+  --manifest str/manifest/esm_affinity_trainable_manifest.csv \
+  --model-name facebook/esm2_t12_35M_UR50D \
+  --cache-dir str/manifest/cache/esm_embeddings \
+  --report-json str/manifest/cache/esm_embeddings_report.json \
+  --device cuda \
+  --float16-output
+
+# 8. 合并 ESM embedding 与 ligand graph，验证训练 batch
+python str/scripts/data/build_training_batch.py \
+  --manifest str/manifest/esm_affinity_trainable_manifest.csv \
+  --esm-cache-dir str/manifest/cache/esm_embeddings \
+  --ligand-cache-dir str/manifest/cache/ligand_graphs \
+  --report-json str/manifest/esm_ligand_training_batch_report.json \
+  --split train \
+  --limit 128 \
+  --batch-size 8
+```
+
+执行完成后，应得到当前阶段的核心产物：
+
+```text
+str/manifest/esm_affinity_manifest.csv
+str/manifest/esm_affinity_trainable_manifest.csv
+str/manifest/cache/ligand_graphs/
+str/manifest/cache/esm_embeddings/
+str/manifest/esm_ligand_training_batch_report.json
+```
+
+当前已知数据规模：
+
+```text
+完整 manifest: 19037
+train / valid / test: 17608 / 1038 / 391
+trainable manifest: 19033
+过滤 ligand: 2pll, 3vjs, 3vjt, 4hrd
+trainable train / valid / test: 17604 / 1038 / 391
+```
 
 ### 3.1 生成完整 manifest
 
@@ -396,6 +656,73 @@ python str/scripts/data/cache_esm_embeddings.py \
   --float16-output
 ```
 
+### 3.7 构造 ESM + ligand graph 训练 batch
+
+该步骤把以下两个缓存按 `pdb_id` 合并：
+
+```text
+str/manifest/cache/esm_embeddings/{pdb_id}.pt
+str/manifest/cache/ligand_graphs/{pdb_id}.pt
+```
+
+输出 batch 字段：
+
+```text
+pdb_id
+split
+protein_embedding          [batch_size, max_protein_len, esm_hidden_dim]
+protein_mask               [batch_size, max_protein_len]
+protein_lengths            [batch_size]
+ligand_atom_features       [total_atoms, 9]
+ligand_atom_coordinates    [total_atoms, 3]
+ligand_bond_index          [2, total_directed_edges]
+ligand_bond_features       [total_directed_edges, 4]
+ligand_batch               [total_atoms]
+labels                     [batch_size]
+```
+
+Mac 本地 debug cache 验证：
+
+```bash
+python str/scripts/data/build_training_batch.py \
+  --manifest str/manifest/esm_affinity_trainable_manifest.csv \
+  --esm-cache-dir str/manifest/cache/esm_embeddings_debug \
+  --ligand-cache-dir str/manifest/cache/ligand_graphs \
+  --report-json str/manifest/esm_ligand_training_batch_debug_report.json \
+  --split train \
+  --limit 20 \
+  --batch-size 4
+```
+
+当前本地 debug 验证结果：
+
+```text
+status: PASS
+protein_embedding: [4, 418, 320]
+ligand_atom_features: [223, 9]
+ligand_bond_index: [2, 456]
+labels: [4]
+```
+
+Linux GPU 全量 cache 验证：
+
+```bash
+python str/scripts/data/build_training_batch.py \
+  --manifest str/manifest/esm_affinity_trainable_manifest.csv \
+  --esm-cache-dir str/manifest/cache/esm_embeddings \
+  --ligand-cache-dir str/manifest/cache/ligand_graphs \
+  --report-json str/manifest/esm_ligand_training_batch_report.json \
+  --split train \
+  --limit 128 \
+  --batch-size 8
+```
+
+如需随机抽样检查，可额外添加：
+
+```bash
+--sample-mode random --seed 42
+```
+
 ## 4. 未来步骤
 
 ### 4.1 完成全量 ESM embedding 缓存
@@ -419,25 +746,23 @@ facebook/esm2_t12_35M_UR50D
 facebook/esm2_t30_150M_UR50D
 ```
 
-### 4.2 实现 ESM + ligand graph dataloader
+### 4.2 验证 ESM + ligand graph dataloader
 
-需要把以下缓存合并成训练 batch：
+已实现：
 
 ```text
-str/manifest/cache/esm_embeddings/{pdb_id}.pt
-str/manifest/cache/ligand_graphs/{pdb_id}.pt
+str/scripts/data/build_training_batch.py
 ```
 
-batch 应包含：
+该脚本会检查 ESM cache 与 ligand graph cache 是否齐全，并构造训练 batch。Linux 全量缓存完成后，应先运行：
 
-```text
-protein_embedding
-protein_mask
-ligand_atom_features
-ligand_bond_index
-ligand_bond_features
-ligand_atom_coordinates
-label pAffinity
+```bash
+python str/scripts/data/build_training_batch.py \
+  --esm-cache-dir str/manifest/cache/esm_embeddings \
+  --ligand-cache-dir str/manifest/cache/ligand_graphs \
+  --split train \
+  --limit 128 \
+  --batch-size 8
 ```
 
 ### 4.3 训练 frozen ESM baseline

@@ -13,11 +13,11 @@ from pathlib import Path
 import pandas as pd
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from scripts.sequence_leakage_check import extract_chain_sequences_from_pdb  # noqa: E402
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+STR_ROOT = PROJECT_ROOT / "str"
+for import_root in (STR_ROOT, PROJECT_ROOT):
+    if str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
 
 
 DEFAULT_SOURCE_CSV = Path(
@@ -58,6 +58,58 @@ AFFINITY_PATTERN = re.compile(
     r"(?P<type>Kd|Ki|IC50)\s*(?P<relation>[=<>~])\s*(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>fM|pM|nM|uM|µM|mM|M)",
     re.IGNORECASE,
 )
+AA3_TO_AA1 = {
+    "ALA": "A",
+    "ARG": "R",
+    "ASN": "N",
+    "ASP": "D",
+    "CYS": "C",
+    "GLN": "Q",
+    "GLU": "E",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LEU": "L",
+    "LYS": "K",
+    "MET": "M",
+    "PHE": "F",
+    "PRO": "P",
+    "SER": "S",
+    "THR": "T",
+    "TRP": "W",
+    "TYR": "Y",
+    "VAL": "V",
+    "SEC": "U",
+    "PYL": "O",
+    "MSE": "M",
+}
+
+
+def extract_chain_sequences_from_pdb(protein_path: str | Path) -> dict[str, str]:
+    """Extract chain-level amino-acid sequences from ATOM records in a PDB file."""
+
+    chains: dict[str, list[str]] = {}
+    seen_residues: set[tuple[str, str, str]] = set()
+    protein_path = Path(protein_path)
+
+    with protein_path.open("r", encoding="utf-8", errors="ignore") as handle:
+        for line in handle:
+            if not line.startswith("ATOM"):
+                continue
+            residue_name = line[17:20].strip().upper()
+            aa = AA3_TO_AA1.get(residue_name)
+            if aa is None:
+                continue
+            chain_id = line[21].strip() or "_"
+            residue_id = line[22:26].strip()
+            insertion_code = line[26].strip()
+            key = (chain_id, residue_id, insertion_code)
+            if key in seen_residues:
+                continue
+            seen_residues.add(key)
+            chains.setdefault(chain_id, []).append(aa)
+
+    return {chain_id: "".join(sequence) for chain_id, sequence in chains.items() if sequence}
 
 
 def read_id_file(path: Path) -> list[str]:

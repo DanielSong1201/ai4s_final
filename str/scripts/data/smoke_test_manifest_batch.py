@@ -11,9 +11,11 @@ import numpy as np
 import pandas as pd
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+STR_ROOT = PROJECT_ROOT / "str"
+for import_root in (STR_ROOT, PROJECT_ROOT):
+    if str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
 
 from scripts.data.create_esm_manifest import display_path, project_path  # noqa: E402
 
