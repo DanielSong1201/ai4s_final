@@ -17,15 +17,17 @@ final_project/
 │   ├── README.md
 │   ├── requirements.txt
 │   ├── scripts/
-│   │   └── data/
-│   │       ├── create_esm_manifest.py
-│   │       ├── validate_manifest.py
-│   │       ├── smoke_test_manifest_batch.py
-│   │       ├── create_trainable_manifest.py
-│   │       ├── cache_ligand_graphs.py
-│   │       ├── smoke_test_graph_batch.py
-│   │       ├── cache_esm_embeddings.py
-│   │       └── build_training_batch.py
+│   │   ├── data/
+│   │   │   ├── create_esm_manifest.py
+│   │   │   ├── validate_manifest.py
+│   │   │   ├── smoke_test_manifest_batch.py
+│   │   │   ├── create_trainable_manifest.py
+│   │   │   ├── cache_ligand_graphs.py
+│   │   │   ├── smoke_test_graph_batch.py
+│   │   │   ├── cache_esm_embeddings.py
+│   │   │   └── build_training_batch.py
+│   │   └── train/
+│   │       └── train_frozen_esm_baseline.py
 │   ├── split_sequence_cluster_all_raw/
 │   │   ├── timesplit_no_lig_overlap_train
 │   │   ├── timesplit_no_lig_overlap_val
@@ -44,11 +46,18 @@ final_project/
 │       ├── esm_affinity_graph_batch_smoke_test_report.json
 │       ├── esm_ligand_training_batch_debug_report.json
 │       ├── esm_ligand_training_batch_report.json
-│       └── cache/
-│           ├── ligand_graphs/
-│           ├── ligand_graphs_report.json
-│           ├── esm_embeddings_debug/
-│           └── esm_embeddings_report_debug.json
+│       ├── cache/
+│       │   ├── ligand_graphs/
+│       │   ├── ligand_graphs_report.json
+│       │   ├── esm_embeddings_debug/
+│       │   └── esm_embeddings_report_debug.json
+│       └── outputs/
+│           └── baseline_frozen_esm/
+│               ├── checkpoints/
+│               ├── metrics.json
+│               ├── history.csv
+│               ├── predictions_valid.csv
+│               └── predictions_test.csv
 └── data/
     ├── raw/
     │   └── pdbbind2020/
@@ -767,20 +776,87 @@ python str/scripts/data/build_training_batch.py \
 
 ### 4.3 训练 frozen ESM baseline
 
-第一版模型：
+已实现：
 
 ```text
-protein_embedding -> mean pooling
-ligand graph 或 Morgan fingerprint -> ligand vector
+str/scripts/train/train_frozen_esm_baseline.py
+```
+
+第一版模型保持简单，作为后续 GNN / pocket pooling / cross-attention 的对照基线：
+
+```text
+protein_embedding + protein_mask -> masked mean pooling
+ligand_atom_features + ligand_batch -> atom mean pooling
 concat -> MLP -> pAffinity
 loss: MSELoss
+```
+
+本地或服务器小规模 smoke train：
+
+```bash
+PYTHONPATH=$(pwd) python str/scripts/train/train_frozen_esm_baseline.py \
+  --esm-cache-dir str/manifest/cache/esm_embeddings \
+  --ligand-cache-dir str/manifest/cache/ligand_graphs \
+  --train-limit 512 \
+  --valid-limit 128 \
+  --test-limit 128 \
+  --epochs 3 \
+  --batch-size 8 \
+  --device cuda
+```
+
+如果只想用本地 debug ESM cache 验证脚本逻辑，可临时把 train split 当作 valid/test：
+
+```bash
+PYTHONPATH=$(pwd) python str/scripts/train/train_frozen_esm_baseline.py \
+  --esm-cache-dir str/manifest/cache/esm_embeddings_debug \
+  --ligand-cache-dir str/manifest/cache/ligand_graphs \
+  --train-split train \
+  --valid-split train \
+  --test-split train \
+  --train-limit 12 \
+  --valid-limit 4 \
+  --test-limit 4 \
+  --epochs 2 \
+  --batch-size 4 \
+  --device auto \
+  --output-dir str/manifest/outputs/baseline_frozen_esm_debug
+```
+
+当前本地 debug 训练验证结果：
+
+```text
+status: PASS
+epochs: 2
+train rows / valid rows / test rows: 12 / 4 / 4
+best epoch: 2
+valid RMSE: 4.2290
+test RMSE: 4.2290
+output: str/manifest/outputs/baseline_frozen_esm_debug/
+```
+
+Linux GPU 全量 baseline：
+
+```bash
+PYTHONPATH=$(pwd) python str/scripts/train/train_frozen_esm_baseline.py \
+  --esm-cache-dir str/manifest/cache/esm_embeddings \
+  --ligand-cache-dir str/manifest/cache/ligand_graphs \
+  --epochs 30 \
+  --batch-size 16 \
+  --hidden-dim 256 \
+  --lr 1e-3 \
+  --weight-decay 1e-4 \
+  --device cuda
 ```
 
 输出：
 
 ```text
 str/manifest/outputs/baseline_frozen_esm/
+├── checkpoints/
+│   └── best.pt
 ├── metrics.json
+├── history.csv
 ├── predictions_valid.csv
 └── predictions_test.csv
 ```
