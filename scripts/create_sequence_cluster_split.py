@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from tqdm.auto import tqdm
 
 from scripts.create_interformer_splits import (
     EVAL_SUBSET_FILES,
@@ -97,7 +98,13 @@ def load_source_table(
 
 def build_chain_sequence_table(split_df: pd.DataFrame, min_length: int = 30) -> pd.DataFrame:
     rows = []
-    for row in split_df.itertuples(index=False):
+    rows_iter = tqdm(
+        split_df.itertuples(index=False),
+        total=len(split_df),
+        desc="Extract protein chains",
+        unit="complex",
+    )
+    for row in rows_iter:
         for chain_id, sequence in extract_chain_sequences_from_pdb(row.protein_path).items():
             if len(sequence) < min_length:
                 continue
@@ -303,7 +310,7 @@ def assign_components_to_splits(
     ids = comp_df["component_id"].tolist()
     best = None
 
-    for seed in range(seeds):
+    for seed in tqdm(range(seeds), desc="Search component split seeds", unit="seed"):
         rng = random.Random(seed)
         ordered = ids[:]
         rng.shuffle(ordered)

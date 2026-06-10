@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 import pandas as pd
+from tqdm.auto import tqdm
 
 
 AA3_TO_AA1 = {
@@ -72,7 +73,13 @@ def build_sequence_table(split_csv: str | Path, min_length: int = 30) -> pd.Data
     split_df = split_df[split_df["split"].isin(["train", "valid", "test"])].copy()
 
     rows = []
-    for row in split_df.itertuples(index=False):
+    rows_iter = tqdm(
+        split_df.itertuples(index=False),
+        total=len(split_df),
+        desc="Extract leakage-check chains",
+        unit="complex",
+    )
+    for row in rows_iter:
         sequences = extract_chain_sequences_from_pdb(row.protein_path)
         for chain_id, sequence in sequences.items():
             if len(sequence) < min_length:

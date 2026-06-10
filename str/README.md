@@ -31,11 +31,17 @@ final_project/
     │   ├── timesplit_no_lig_overlap_train
     │   ├── timesplit_no_lig_overlap_val
     │   └── timesplit_test
+    ├── split_iid_all_raw/
+    │   ├── timesplit_no_lig_overlap_train
+    │   ├── timesplit_no_lig_overlap_val
+    │   └── timesplit_test
     ├── scripts/
+    │   ├── split_raw_pdbbind.sh
     │   ├── build_manifest_from_split.sh
     │   ├── validate_after_manifest.sh
     │   ├── run_frozen_esm_baseline.sh
     │   ├── data/
+    │   │   ├── create_iid_structure_split.py
     │   │   ├── create_esm_manifest.py
     │   │   ├── validate_manifest.py
     │   │   ├── create_trainable_manifest.py
@@ -221,7 +227,156 @@ metric = RMSE / MAE / R2 / Pearson / Spearman
 
 因此 baseline 的意义是建立一个可复现、可比较的最低训练闭环：数据切分、缓存、batch、训练、评估、预测文件都能稳定产出。
 
-## 4. 从已切分数据到 Baseline 的完整流程
+## 4. 从原始 PDBbind 结构生成 Train/Valid/Test Split
+
+本项目的 split 单位是 **PDB complex / PDB ID**。每个样本对应一组结构文件：
+
+```text
+{pdb_id}_protein.pdb
+{pdb_id}_pocket.pdb
+{pdb_id}_ligand.sdf
+{pdb_id}_ligand.mol2
+```
+
+这组文件必须整体进入同一个 split。这里不会把 protein sequence 片段切进不同 split；sequence 只用于计算蛋白同源关系，作为防止结构样本泄漏的约束。
+
+### 4.1 两种切分模式
+
+统一入口：
+
+```bash
+PYTHONPATH=$(pwd) bash str/scripts/split_raw_pdbbind.sh
+```
+
+该脚本通过 `IID` 控制切分策略：
+
+```text
+IID=true   完全随机切分 PDB complex，忽略 40% sequence similarity 先验
+IID=false  仍然切分 PDB complex，但使用 40% sequence similarity 先验约束
+```
+
+`IID=false` 是默认值，也是当前更适合作为主要实验的严格 split。它的逻辑是：
+
+```text
+1. 从每个 PDB complex 的 *_protein.pdb 中抽取 chain sequence
+2. 用 MMseqs2 计算 chain-level all-vs-all similarity
+3. 若两个 chain 满足 identity >= 40% 且 coverage >= 0.8，则连接它们所属的 PDB complex
+4. 在 PDB complex connected component 级别分配 train / valid / test
+5. 输出 Interformer-compatible split 文件
+6. 再独立运行 sequence leakage check
+```
+
+注意：第 1-3 步使用 sequence similarity，但最终被分配的是 PDB complex 结构样本，而不是 sequence 片段。
+
+### 4.2 默认输出
+
+`IID=false` 默认输出：
+
+```text
+str/split_sequence_cluster_all_raw/
+├── timesplit_no_lig_overlap_train
+├── timesplit_no_lig_overlap_val
+├── timesplit_test
+├── coresetlist
+├── diff_test+core
+├── posebusters_pdb_ccd_ids.txt
+├── timesplit_test_no_rec_overlap
+└── timesplit_test_sanitizable
+
+data/processed/sequence_cluster_split_all_raw/
+├── pdbbind_sequence_cluster_splits.csv
+├── sequence_cluster_split_report.json
+├── sequence_component_assignments.csv
+├── cross_split_sequence_violations.csv
+└── sequence_leakage_check/
+```
+
+`IID=true` 默认输出：
+
+```text
+str/split_iid_all_raw/
+├── timesplit_no_lig_overlap_train
+├── timesplit_no_lig_overlap_val
+├── timesplit_test
+└── ...
+
+data/processed/iid_split_all_raw/
+├── pdbbind_sequence_cluster_splits.csv
+├── iid_structure_split_report.json
+└── sequence_leakage_check/
+```
+
+为了复用后续 manifest 生成脚本，IID 模式下的桥接表也命名为 `pdbbind_sequence_cluster_splits.csv`。这里的文件名是为了兼容接口，不表示 IID 模式做了 sequence-cluster 约束。
+
+### 4.3 严格结构级 Split
+
+默认严格模式：
+
+```bash
+PYTHONPATH=$(pwd) bash str/scripts/split_raw_pdbbind.sh
+```
+
+等价于：
+
+```bash
+IID=false \
+INDEX_PATH=data/raw/pdbbind2020/index/index/INDEX_general_PL.2020R1.lst \
+COMPLEX_ROOT=data/raw/pdbbind2020/complexes/P-L \
+SOURCE_SPLIT_DIR=split \
+OUTPUT_SPLIT_DIR=str/split_sequence_cluster_all_raw \
+OUTPUT_DIR=data/processed/sequence_cluster_split_all_raw \
+MIN_SEQ_ID=0.4 \
+COVERAGE=0.8 \
+MIN_LENGTH=30 \
+SEEDS=128 \
+UNIVERSE=all_raw \
+PYTHONPATH=$(pwd) bash str/scripts/split_raw_pdbbind.sh
+```
+
+阶段输出：
+
+```text
+[1/3] Create sequence-cluster split with 40% similarity prior
+[2/3] Verify Interformer-style split files
+[3/3] Check train-vs-valid/test sequence leakage
+```
+
+长耗时步骤会显示 `tqdm` 进度条，包括结构样本的 chain 抽取、component assignment seed 搜索、leakage check chain 抽取等。
+
+### 4.4 IID 随机结构级 Split
+
+如果需要一个 IID/random split 作为对照：
+
+```bash
+IID=true \
+OUTPUT_SPLIT_DIR=str/split_iid_all_raw \
+OUTPUT_DIR=data/processed/iid_split_all_raw \
+SEED=42 \
+PYTHONPATH=$(pwd) bash str/scripts/split_raw_pdbbind.sh
+```
+
+IID 模式会随机分配 PDB complex ID。它不会阻止同源蛋白跨 split，因此 sequence leakage check 可能报告命中；这不是脚本错误，而是 IID/random split 的预期代价。该模式可用于观察随机切分下的上限表现，但不能作为严格 cold-protein 泛化结论。
+
+### 4.5 切分结果如何接入 Manifest
+
+严格 split 接入 manifest：
+
+```bash
+SOURCE_CSV=data/processed/sequence_cluster_split_all_raw/pdbbind_sequence_cluster_splits.csv \
+SPLIT_DIR=str/split_sequence_cluster_all_raw \
+PYTHONPATH=$(pwd) bash str/scripts/build_manifest_from_split.sh
+```
+
+IID split 接入 manifest：
+
+```bash
+SOURCE_CSV=data/processed/iid_split_all_raw/pdbbind_sequence_cluster_splits.csv \
+SPLIT_DIR=str/split_iid_all_raw \
+MANIFEST_DIR=str/manifest_iid \
+PYTHONPATH=$(pwd) bash str/scripts/build_manifest_from_split.sh
+```
+
+## 5. 从已切分数据到 Baseline 的完整流程
 
 以下流程假设你已经有：
 
@@ -235,7 +390,7 @@ data/raw/pdbbind2020/complexes/P-L/
 
 如果数据目录被移动到大容量磁盘，确保当前位置仍能通过软链接访问到 `data/`。
 
-### 4.1 安装依赖
+### 5.1 安装依赖
 
 ```bash
 pip install -r str/requirements.txt
@@ -243,7 +398,7 @@ pip install -r str/requirements.txt
 
 服务器建议使用 CUDA 版 PyTorch。Mac 本地只建议做小规模验证，不建议全量缓存 ESM。
 
-### 4.2 生成 manifest
+### 5.2 生成 manifest
 
 一键从结构级 split 生成 manifest：
 
@@ -293,7 +448,7 @@ MANIFEST_DIR=str/manifest \
 PYTHONPATH=$(pwd) bash str/scripts/build_manifest_from_split.sh
 ```
 
-### 4.3 生成 manifest 后的验证、缓存与 batch 检查
+### 5.3 生成 manifest 后的验证、缓存与 batch 检查
 
 运行：
 
@@ -358,7 +513,7 @@ facebook/esm2_t12_35M_UR50D
 facebook/esm2_t30_150M_UR50D
 ```
 
-### 4.4 训练 frozen ESM baseline
+### 5.4 训练 frozen ESM baseline
 
 运行：
 
@@ -442,9 +597,9 @@ str/manifest/outputs/baseline_frozen_esm/
 cat str/manifest/outputs/baseline_frozen_esm/metrics.json
 ```
 
-## 5. QuickStart
+## 6. QuickStart
 
-从已经切分好的结构数据开始，完整跑到 baseline：
+从原始 PDBbind 结构数据开始，完整跑到 baseline：
 
 ```bash
 cd /tmp/ai4s/ai4s_final
@@ -457,8 +612,12 @@ python -m pip install --upgrade pip
 
 # Linux GPU 示例；如果服务器已经有可用 CUDA 版 PyTorch，可跳过这一行
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
 pip install -r str/requirements.txt
+
+IID=false \
+OUTPUT_SPLIT_DIR=str/split_sequence_cluster_all_raw \
+OUTPUT_DIR=data/processed/sequence_cluster_split_all_raw \
+PYTHONPATH=$(pwd) bash str/scripts/split_raw_pdbbind.sh
 
 PYTHONPATH=$(pwd) bash str/scripts/build_manifest_from_split.sh
 
@@ -508,11 +667,11 @@ PYTHONPATH=$(pwd) bash str/scripts/run_frozen_esm_baseline.sh
 
 注意：上面的 debug 命令要求对应的 ESM cache 和 ligand graph cache 已经存在。若只缓存了前 32 条样本，batch 随机抽样可能命中未缓存样本；完整实验建议直接全量缓存。
 
-## 6. 下一步改进方向
+## 7. 下一步改进方向
 
 baseline 跑通后，后续不应只调 MLP，而应逐步加入结构建模能力。
 
-### 6.1 Ligand GNN
+### 7.1 Ligand GNN
 
 当前 ligand 表示只是 atom mean pooling。下一步可以把 cached ligand graph 输入 GCN、GINE、GraphSAGE 或 Graph Transformer，得到更强的小分子表示：
 
@@ -522,7 +681,7 @@ atom_features + bond_index + bond_features -> ligand GNN -> ligand vector
 
 目标是替代简单的 atom mean pooling。
 
-### 6.2 Pocket-aware protein pooling
+### 7.2 Pocket-aware protein pooling
 
 当前 protein 使用全序列 mean pooling，可能稀释结合口袋信号。下一步可以根据 `pocket.pdb` 中的残基位置或 pocket chain/residue 编号，只池化 pocket residue 的 ESM embedding：
 
@@ -532,7 +691,7 @@ protein ESM residue embedding -> pocket residue mask -> pocket mean / attention 
 
 这一步通常比直接全序列 pooling 更符合任务目标。
 
-### 6.3 Protein-ligand cross attention
+### 7.3 Protein-ligand cross attention
 
 进一步可以让 ligand atom 表示与 pocket residue 表示交互：
 
@@ -543,7 +702,7 @@ cross-attention / pair bias / distance bias
 
 如果加入结构距离，可从 complex 结构中构建 residue-atom 距离矩阵或接触图。
 
-### 6.4 引入三维结构特征
+### 7.4 引入三维结构特征
 
 目前 ligand graph 保存了 atom coordinates，但 baseline 没有使用。后续可以加入：
 
@@ -557,7 +716,7 @@ SE(3)-aware / EGNN / equivariant block
 
 这会更贴近“给定蛋白-小分子复合物三维结构预测亲和力”的目标。
 
-### 6.5 ESM 微调或参数高效微调
+### 7.5 ESM 微调或参数高效微调
 
 在 baseline 稳定后，可以尝试：
 
@@ -569,7 +728,7 @@ frozen ESM cache
 
 但不建议一开始就端到端微调 ESM，因为显存、速度和过拟合风险都更高。应先保留 frozen ESM baseline 作为对照。
 
-### 6.6 实验记录与对照
+### 7.6 实验记录与对照
 
 每个非 baseline 方向都应保留相同 split 和相同评估指标：
 
