@@ -15,6 +15,7 @@ import pandas as pd
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -189,7 +190,8 @@ def train_one_epoch(
     model.train()
     total_loss = 0.0
     total_rows = 0
-    for batch in loader:
+    progress = tqdm(loader, desc="Train batches", unit="batch", leave=False)
+    for batch in progress:
         batch = move_batch_to_device(batch, device)
         optimizer.zero_grad(set_to_none=True)
         predictions = model(batch)
@@ -201,6 +203,7 @@ def train_one_epoch(
         batch_size = int(batch["labels"].shape[0])
         total_loss += float(loss.item()) * batch_size
         total_rows += batch_size
+        progress.set_postfix(loss=f"{float(loss.item()):.4f}")
     return total_loss / max(total_rows, 1)
 
 
@@ -213,7 +216,7 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, device:
     labels_all = []
     predictions_all = []
 
-    for batch in loader:
+    for batch in tqdm(loader, desc="Evaluate batches", unit="batch", leave=False):
         batch = move_batch_to_device(batch, device)
         predictions = model(batch)
         loss = criterion(predictions, batch["labels"])
@@ -339,7 +342,7 @@ def main() -> None:
     best_epoch = -1
     history = []
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in tqdm(range(1, args.epochs + 1), desc="Train epochs", unit="epoch"):
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device, args.grad_clip)
         valid_metrics, _ = evaluate(model, valid_loader, criterion, device)
         epoch_record = {

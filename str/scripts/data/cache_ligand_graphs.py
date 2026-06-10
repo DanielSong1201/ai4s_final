@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 import torch
+from tqdm.auto import tqdm
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -208,7 +209,13 @@ def main() -> None:
     edge_counts = []
     source_counts: dict[str, int] = {}
 
-    for row in df.itertuples(index=False):
+    rows_iter = tqdm(
+        df.itertuples(index=False),
+        total=len(df),
+        desc="Cache ligand graphs",
+        unit="ligand",
+    )
+    for row in rows_iter:
         output_path = cache_dir / f"{row.pdb_id}.pt"
         if output_path.exists() and not args.overwrite:
             skipped_existing += 1

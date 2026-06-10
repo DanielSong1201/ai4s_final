@@ -1,508 +1,278 @@
-# 基于 ESM 的蛋白-小分子结合亲和力预测项目
+# 基于 ESM 的蛋白-小分子结合亲和力预测
 
-本目录记录当前 ESM affinity 项目的数据准备、缓存验证和后续训练计划。目标是基于蛋白-小分子复合物三维结构预测结合亲和力 `pKd / pKi / pIC50 / pAffinity`。
+本目录用于完成一个从 PDBbind 结构数据出发的结合亲和力预测实验。当前目标是：在已有结构级划分的基础上，生成训练 manifest，缓存蛋白 ESM embedding 与小分子 graph，验证训练 batch，并训练一个 frozen ESM baseline。
 
 ## 1. 项目结构
 
-当前仓库中与本项目直接相关的结构如下：
+与当前实验直接相关的文件结构如下：
 
 ```text
 final_project/
+├── data/
+│   ├── raw/
+│   │   └── pdbbind2020/
+│   │       └── complexes/P-L/
+│   │           └── {pdb_id}/
+│   │               ├── {pdb_id}_protein.pdb
+│   │               ├── {pdb_id}_pocket.pdb
+│   │               ├── {pdb_id}_ligand.sdf
+│   │               └── {pdb_id}_ligand.mol2
+│   └── processed/
+│       └── sequence_cluster_split_all_raw/
+│           └── pdbbind_sequence_cluster_splits.csv
 ├── scripts/
 │   ├── create_sequence_cluster_split.py
 │   ├── sequence_leakage_check.py
-│   ├── create_interformer_splits.py
-│   └── data_inspection.py
-├── str/
-│   ├── README.md
-│   ├── requirements.txt
-│   ├── scripts/
-│   │   ├── build_manifest_from_split.sh
-│   │   ├── data/
-│   │   │   ├── create_esm_manifest.py
-│   │   │   ├── validate_manifest.py
-│   │   │   ├── smoke_test_manifest_batch.py
-│   │   │   ├── create_trainable_manifest.py
-│   │   │   ├── cache_ligand_graphs.py
-│   │   │   ├── smoke_test_graph_batch.py
-│   │   │   ├── cache_esm_embeddings.py
-│   │   │   └── build_training_batch.py
-│   │   └── train/
-│   │       └── train_frozen_esm_baseline.py
-│   ├── split_sequence_cluster_all_raw/
-│   │   ├── timesplit_no_lig_overlap_train
-│   │   ├── timesplit_no_lig_overlap_val
-│   │   └── timesplit_test
-│   └── manifest/
-│       ├── esm_affinity_manifest.csv
-│       ├── esm_affinity_manifest_report.json
-│       ├── esm_affinity_manifest_validation_report.json
-│       ├── esm_affinity_trainable_manifest.csv
-│       ├── esm_affinity_trainable_manifest_report.json
-│       ├── ligand_parse_failures.csv
-│       ├── general_PL_2020_sequence_cluster_all_raw.csv
-│       ├── esm_affinity_batch_smoke_report.json
-│       ├── esm_affinity_graph_batch_smoke_report.json
-│       ├── esm_affinity_graph_batch_smoke_valid_report.json
-│       ├── esm_affinity_graph_batch_smoke_test_report.json
-│       ├── esm_ligand_training_batch_debug_report.json
-│       ├── esm_ligand_training_batch_report.json
-│       ├── cache/
-│       │   ├── ligand_graphs/
-│       │   ├── ligand_graphs_report.json
-│       │   ├── esm_embeddings_debug/
-│       │   └── esm_embeddings_report_debug.json
-│       └── outputs/
-│           └── baseline_frozen_esm/
-│               ├── checkpoints/
-│               ├── metrics.json
-│               ├── history.csv
-│               ├── predictions_valid.csv
-│               └── predictions_test.csv
-└── data/
-    ├── raw/
-    │   └── pdbbind2020/
-    └── processed/
-        └── sequence_cluster_split_validation/
-            └── all_raw/
-                ├── pdbbind_sequence_cluster_split_table.csv
-                ├── pdbbind_sequence_cluster_split_table_report.json
-                └── final_validation_summary.json
+│   └── create_interformer_splits.py
+└── str/
+    ├── README.md
+    ├── requirements.txt
+    ├── split_sequence_cluster_all_raw/
+    │   ├── timesplit_no_lig_overlap_train
+    │   ├── timesplit_no_lig_overlap_val
+    │   └── timesplit_test
+    ├── scripts/
+    │   ├── build_manifest_from_split.sh
+    │   ├── validate_after_manifest.sh
+    │   ├── run_frozen_esm_baseline.sh
+    │   ├── data/
+    │   │   ├── create_esm_manifest.py
+    │   │   ├── validate_manifest.py
+    │   │   ├── create_trainable_manifest.py
+    │   │   ├── cache_ligand_graphs.py
+    │   │   ├── cache_esm_embeddings.py
+    │   │   ├── build_training_batch.py
+    │   │   ├── smoke_test_manifest_batch.py
+    │   │   └── smoke_test_graph_batch.py
+    │   └── train/
+    │       └── train_frozen_esm_baseline.py
+    └── manifest/
+        ├── esm_affinity_manifest.csv
+        ├── esm_affinity_manifest_report.json
+        ├── esm_affinity_manifest_validation_report.json
+        ├── esm_affinity_trainable_manifest.csv
+        ├── esm_affinity_trainable_manifest_report.json
+        ├── ligand_parse_failures.csv
+        ├── general_PL_2020_sequence_cluster_all_raw.csv
+        ├── cache/
+        │   ├── ligand_graphs/
+        │   ├── ligand_graphs_report.json
+        │   ├── esm_embeddings/
+        │   └── esm_embeddings_report.json
+        └── outputs/
+            └── baseline_frozen_esm/
+                ├── checkpoints/best.pt
+                ├── metrics.json
+                ├── history.csv
+                ├── predictions_valid.csv
+                └── predictions_test.csv
 ```
 
-依赖文件：
+说明：
+
+- `str/split_sequence_cluster_all_raw/` 保存的是结构级 split 文件，文件内容是 PDB ID 列表，不是物理复制后的结构目录。
+- `data/processed/sequence_cluster_split_all_raw/pdbbind_sequence_cluster_splits.csv` 是从原始 PDBbind 结构和 sequence-cluster split 生成的桥接表，包含结构路径、标签、split 等信息。
+- `str/manifest/` 是当前实验的工作目录，保存 manifest、缓存、验证报告和 baseline 输出。
+
+## 2. Requirements
+
+建议在 Linux GPU 服务器上完成全量 ESM 缓存和 baseline 训练。Mac 本地只建议做小规模 smoke test。
+
+### 2.1 创建虚拟环境
+
+推荐使用 conda：
+
+```bash
+conda create -n ai4s python=3.11 -y
+conda activate ai4s
+python -m pip install --upgrade pip
+```
+
+如果已经有可用环境，也可以直接激活已有环境，但需要保证 Python、PyTorch、RDKit、Transformers 等依赖可用。
+
+### 2.2 安装 PyTorch
+
+Linux GPU 机器按 CUDA 版本安装。以 CUDA 12.1 为例：
+
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+如果服务器已经预装了 CUDA 版 PyTorch，可以先检查：
+
+```bash
+python - <<'PY'
+import torch
+print(torch.__version__)
+print("cuda available:", torch.cuda.is_available())
+print("cuda version:", torch.version.cuda)
+PY
+```
+
+Mac 本地验证可安装 CPU/MPS 版本：
+
+```bash
+pip install torch torchvision torchaudio
+```
+
+### 2.3 安装项目依赖
 
 ```bash
 pip install -r str/requirements.txt
 ```
 
-当前本机已验证的主要依赖：
+`str/requirements.txt` 覆盖当前流程需要的主要依赖：
 
 ```text
-torch 2.12.0
-numpy 2.4.4
-pandas 3.0.2
-rdkit 2025.09.6
-transformers 5.10.2
-huggingface_hub 1.18.0
-safetensors 0.8.0
-tqdm 4.68.1
+torch
+numpy
+pandas
+rdkit
+transformers
+huggingface_hub
+safetensors
+scikit-learn
+tqdm
 ```
 
-`scikit-learn` 当前环境尚未安装，但后续 baseline 训练和指标计算需要，已写入 `requirements.txt`。
+如果 `rdkit` 通过 pip 安装失败，可以改用 conda-forge：
 
-## 2. 分步的实现思路
-
-整体路线：
-
-```text
-PDBbind / Interformer split
-  -> 生成 ESM affinity manifest
-  -> 验证标签、路径、split、ligand 可解析性
-  -> 过滤不可构图 ligand，生成 trainable manifest
-  -> 缓存 ligand graph
-  -> 缓存 ESM residue embedding
-  -> 构造 graph + ESM batch
-  -> 训练 frozen ESM baseline
-  -> 训练 ligand GNN / pocket-aware / cross-attention 模型
+```bash
+conda install -c conda-forge rdkit -y
 ```
 
-### 2.1 数据与标签
+### 2.4 验证依赖
 
-每个样本包含：
+```bash
+python - <<'PY'
+import torch
+import pandas
+import numpy
+import tqdm
+from rdkit import Chem
+from transformers import AutoTokenizer, EsmModel
+
+print("torch:", torch.__version__)
+print("cuda:", torch.cuda.is_available())
+print("pandas:", pandas.__version__)
+print("numpy:", numpy.__version__)
+print("rdkit ok")
+print("transformers ok")
+PY
+```
+
+### 2.5 Hugging Face ESM 模型
+
+第一次运行 ESM 缓存脚本时会自动下载模型。默认建议先用：
 
 ```text
-pdb_id
-split
+facebook/esm2_t6_8M_UR50D
+```
+
+服务器可以联网时直接运行缓存脚本即可。如果服务器不能联网，需要提前在可联网机器下载 Hugging Face cache，再同步到服务器，并在运行时设置：
+
+```bash
+export HF_HOME=/path/to/huggingface_cache
+```
+
+如果模型已经在本地 cache 中，可以使用：
+
+```bash
+ESM_LOCAL_FILES_ONLY=1 PYTHONPATH=$(pwd) bash str/scripts/validate_after_manifest.sh
+```
+
+## 3. 当前 Baseline 思路
+
+当前 baseline 是 frozen ESM + ligand graph mean pooling + MLP regression。它不是最终模型，而是后续结构感知模型的对照基线。
+
+数据流：
+
+```text
 protein_sequence
-protein_path
-pocket_path
-ligand_sdf_path
-ligand_mol2_path
-affinity_type
-affinity_value
-affinity_unit
-affinity_molar
-pAffinity
+  -> Hugging Face ESM
+  -> residue-level embedding cache
+  -> masked mean pooling
+
+ligand_sdf / ligand_mol2
+  -> RDKit
+  -> atom feature + bond graph cache
+  -> atom mean pooling
+
+protein vector + ligand vector
+  -> concat
+  -> MLP
+  -> pAffinity
 ```
 
-亲和力统一为：
+训练目标：
 
 ```text
-pAffinity = -log10(affinity in mol/L)
+target = pAffinity = -log10(affinity in mol/L)
+loss   = MSELoss 或 HuberLoss
+metric = RMSE / MAE / R2 / Pearson / Spearman
 ```
 
-脚本支持解析 `Kd / Ki / IC50`，以及 `= / < / > / ~` 关系符号和 `mM / uM / nM / pM / fM` 单位。
+当前 baseline 的主要限制：
 
-### 2.2 数据划分
+- 蛋白只使用全序列 ESM embedding 的 mean pooling，没有显式 pocket pooling。
+- 小分子 graph 只做 atom mean pooling，没有使用 GNN 消息传递。
+- 没有建模蛋白 residue 与 ligand atom 之间的空间交互。
+- ESM 是 frozen cache，不参与反向传播。
 
-当前使用 `str/split_sequence_cluster_all_raw/`。这里的切分对象是 **PDBbind complex / PDB ID 级别的结构样本**，不是单独切分蛋白链、ligand、embedding 或表格行。
+因此 baseline 的意义是建立一个可复现、可比较的最低训练闭环：数据切分、缓存、batch、训练、评估、预测文件都能稳定产出。
 
-每个 PDB ID 对应一组结构文件：
+## 4. 从已切分数据到 Baseline 的完整流程
 
-```text
-{pdb_id}_protein.pdb
-{pdb_id}_pocket.pdb
-{pdb_id}_ligand.sdf
-{pdb_id}_ligand.mol2
-```
-
-这组文件必须整体进入同一个 split。实际训练时不需要把结构文件物理复制成 train/valid/test 三个目录；split 文件保存的是 PDB ID，后续 manifest 会把每个 PDB ID 解析回原始结构路径。
-
-split 文件保持 Interformer 格式：
+以下流程假设你已经有：
 
 ```text
-timesplit_no_lig_overlap_train
-timesplit_no_lig_overlap_val
-timesplit_test
-```
-
-切分方法是：
-
-```text
-1. 从每个 PDB complex 的 *_protein.pdb 中抽取 chain sequence
-2. 用 MMseqs2 做 chain-level all-vs-all 相似性搜索
-3. 如果两个 chain 满足 identity >= 40% 且 coverage >= 0.8，则把它们所在的 PDB complex 连接到同一个 component
-4. 在 component 级别分配 train / valid / test
-5. 输出 PDB ID 列表形式的 Interformer-compatible split 文件
-6. 再独立验证跨 split 是否存在 identity >= 40% 且 coverage >= 0.8 的命中
-```
-
-因此，sequence similarity 是约束条件，最终被切分的是 PDB 结构样本。当前 split 已通过序列泄漏检查：
-
-```text
-identity >= 40%
-coverage >= 0.8
-cross-split violation = 0
-```
-
-### 2.3 蛋白表示
-
-使用 Hugging Face ESM：
-
-```text
-facebook/esm2_t6_8M_UR50D      本地 Mac 验证
-facebook/esm2_t12_35M_UR50D    Linux GPU 轻量全量缓存
-facebook/esm2_t30_150M_UR50D   后续主实验候选
-```
-
-缓存策略：
-
-```text
-protein_sequence -> ESM -> residue-level embedding -> .pt cache
-```
-
-多链序列使用 `:` 分隔，缓存脚本会按链拆分。单链超过 1022 residues 时，脚本会自动按 chunk 切分，再拼回 residue-level embedding。
-
-### 2.4 小分子表示
-
-使用 RDKit 从 `ligand_sdf_path` 优先读取 ligand；失败时尝试 `ligand_mol2_path`。
-
-缓存的 ligand graph 字段：
-
-```text
-atom_features            [num_atoms, 9]
-atom_coordinates         [num_atoms, 3]
-bond_index               [2, num_directed_edges]
-bond_features            [num_directed_edges, 4]
-num_atoms
-num_bonds
-pAffinity
-```
-
-### 2.5 模型训练思路
-
-第一阶段建议使用 frozen ESM baseline：
-
-```text
-protein: cached ESM residue embedding -> mean pooling
-ligand: Morgan fingerprint 或 cached ligand graph
-fusion: concat
-head: MLP regression
-loss: MSELoss 或 HuberLoss
-target: pAffinity
-```
-
-后续升级路线：
-
-```text
-frozen ESM + Morgan fingerprint
-frozen ESM + ligand GNN
-frozen ESM + pocket pooling
-pocket residue ESM embedding + ligand atom embedding cross-attention
-partial fine-tuning / LoRA
-```
-
-评估指标：
-
-```text
-RMSE
-MAE
-R2
-Pearson
-Spearman
-```
-
-## 3. 当前已完成部分的使用方法
-
-以下命令默认在仓库根目录运行。
-
-### 3.0 Linux 服务器从切分数据复现到当前阶段
-
-服务器上的项目目录假设为：
-
-```text
-/tmp/ai4s/ai4s_final/
-```
-
-当前阶段需要以下输入已经存在：
-
-```text
-data/raw/pdbbind2020/
-data/processed/sequence_cluster_split_validation/all_raw/pdbbind_sequence_cluster_split_table.csv
-str/split_sequence_cluster_all_raw/
-```
-
-其中：
-
-```text
-data/raw/pdbbind2020/
-```
-
-来自 PDBbind 原始数据，包含 `index/index/INDEX_general_PL.2020R1.lst` 和 `complexes/P-L/` 下的 protein、pocket、ligand 文件。
-
-```text
-str/split_sequence_cluster_all_raw/
-```
-
-是当前项目使用的 sequence-cluster split，至少应包含：
-
-```text
-timesplit_no_lig_overlap_train
-timesplit_no_lig_overlap_val
-timesplit_test
-```
-
-```text
-data/processed/sequence_cluster_split_validation/all_raw/pdbbind_sequence_cluster_split_table.csv
-```
-
-是切分验证后生成的中间表，`create_esm_manifest.py` 默认从该表读取路径、标签、split 元信息，再生成训练 manifest。该文件不属于 PDBbind 官方原始数据；如果服务器上没有，需要从本地同步或重新运行 sequence-cluster split 生成流程。
-
-#### 3.0.1 重新生成 PDB 结构级 split
-
-如果服务器上还没有 `str/split_sequence_cluster_all_raw/`，需要先从 PDBbind 原始结构生成 PDB ID 级 split。输入是：
-
-```text
-data/raw/pdbbind2020/index/index/INDEX_general_PL.2020R1.lst
+str/split_sequence_cluster_all_raw/timesplit_no_lig_overlap_train
+str/split_sequence_cluster_all_raw/timesplit_no_lig_overlap_val
+str/split_sequence_cluster_all_raw/timesplit_test
+data/processed/sequence_cluster_split_all_raw/pdbbind_sequence_cluster_splits.csv
 data/raw/pdbbind2020/complexes/P-L/
-split/
 ```
 
-其中 `split/` 是原 Interformer split 文件目录，用于提供目标 train/valid/test 比例和辅助评估列表。生成 all-raw PDB 结构级 split：
+如果数据目录被移动到大容量磁盘，确保当前位置仍能通过软链接访问到 `data/`。
+
+### 4.1 安装依赖
 
 ```bash
-python scripts/create_sequence_cluster_split.py \
-  --index-path data/raw/pdbbind2020/index/index/INDEX_general_PL.2020R1.lst \
-  --complex-root data/raw/pdbbind2020/complexes/P-L \
-  --source-split-dir split \
-  --output-split-dir split_sequence_cluster_all_raw \
-  --output-dir data/processed/sequence_cluster_split_all_raw \
-  --universe all_raw \
-  --min-seq-id 0.4 \
-  --coverage 0.8 \
-  --min-length 30 \
-  --seeds 256
+pip install -r str/requirements.txt
 ```
 
-该步骤会输出：
+服务器建议使用 CUDA 版 PyTorch。Mac 本地只建议做小规模验证，不建议全量缓存 ESM。
 
-```text
-split_sequence_cluster_all_raw/
-├── timesplit_no_lig_overlap_train
-├── timesplit_no_lig_overlap_val
-├── timesplit_test
-├── coresetlist
-├── diff_test+core
-├── posebusters_pdb_ccd_ids.txt
-├── timesplit_test_no_rec_overlap
-└── timesplit_test_sanitizable
+### 4.2 生成 manifest
 
-data/processed/sequence_cluster_split_all_raw/
-├── chain_sequences.csv
-├── pdbbind_seqid_40_all_vs_all.m8
-├── pdbbind_sequence_cluster_splits.csv
-├── sequence_component_assignments.csv
-├── cross_split_sequence_violations.csv
-└── sequence_cluster_split_report.json
-```
-
-当前 `str` 方案默认读取 `str/split_sequence_cluster_all_raw/`，因此生成后需要复制一份到 `str/` 下：
-
-```bash
-mkdir -p str/split_sequence_cluster_all_raw
-cp split_sequence_cluster_all_raw/* str/split_sequence_cluster_all_raw/
-```
-
-当前已验证的结构级 split 结果：
-
-```text
-train: 17608
-valid: 1038
-test: 391
-cross_split_violation_count: 0
-leakage_detected: false
-```
-
-注意：这里没有把 `data/raw/pdbbind2020/complexes/P-L/` 下的结构文件物理拆成三个目录。切分结果是 PDB ID 列表；manifest 会将 PDB ID 映射回原始结构文件路径，保证同一个 PDB complex 的 protein、pocket、ligand 始终作为一个整体进入同一个 split。
-
-如果需要生成 `create_esm_manifest.py` 默认使用的中间表，应保留或同步：
-
-```text
-data/processed/sequence_cluster_split_validation/all_raw/pdbbind_sequence_cluster_split_table.csv
-```
-
-该表记录每个 PDB ID 的 split、结构文件路径、亲和力标签和验证结果，是从结构级 split 到训练 manifest 的桥接文件。
-
-如果需要从本地同步这些切分相关文件到服务器，可在本地仓库根目录执行：
-
-```bash
-rsync -avh --progress --partial \
-  -e "ssh -p 10731" \
-  str/split_sequence_cluster_all_raw/ \
-  root@connect.bjb2.seetacloud.com:/tmp/ai4s/ai4s_final/str/split_sequence_cluster_all_raw/
-
-rsync -avh --progress --partial \
-  -e "ssh -p 10731" \
-  data/processed/sequence_cluster_split_validation/all_raw/ \
-  root@connect.bjb2.seetacloud.com:/tmp/ai4s/ai4s_final/data/processed/sequence_cluster_split_validation/all_raw/
-```
-
-服务器上先检查关键输入：
-
-```bash
-cd /tmp/ai4s/ai4s_final
-
-test -f data/raw/pdbbind2020/index/index/INDEX_general_PL.2020R1.lst
-test -d data/raw/pdbbind2020/complexes/P-L
-test -f data/processed/sequence_cluster_split_validation/all_raw/pdbbind_sequence_cluster_split_table.csv
-test -f str/split_sequence_cluster_all_raw/timesplit_no_lig_overlap_train
-test -f str/split_sequence_cluster_all_raw/timesplit_no_lig_overlap_val
-test -f str/split_sequence_cluster_all_raw/timesplit_test
-```
-
-安装依赖时，如果 PyTorch 已由云服务器镜像预装，可先安装其余依赖；若 pip 源只指向 PyTorch CUDA 源，需要显式指定 PyPI 或镜像源：
-
-```bash
-python -m pip install -r str/requirements.txt \
-  -i https://pypi.org/simple \
-  --extra-index-url https://download.pytorch.org/whl/cu128
-```
-
-从切分数据开始，到当前阶段的完整执行顺序如下：
-
-```bash
-# 1. 由 sequence-cluster split 和中间表生成完整 manifest
-python str/scripts/data/create_esm_manifest.py \
-  --split-dir str/split_sequence_cluster_all_raw
-
-# 2. 验证 manifest 的标签、路径、split 一致性
-python str/scripts/data/validate_manifest.py \
-  --split-dir str/split_sequence_cluster_all_raw \
-  --ligand-parse-limit 0
-
-# 3. 全量验证 ligand 是否可被 RDKit 解析
-python str/scripts/data/validate_manifest.py \
-  --split-dir str/split_sequence_cluster_all_raw \
-  --ligand-parse-limit -1
-
-# 4. 过滤 4 个不可构图 ligand，生成可训练 manifest
-python str/scripts/data/create_trainable_manifest.py
-
-# 5. 缓存 ligand graph
-python str/scripts/data/cache_ligand_graphs.py
-
-# 6. 验证 ligand graph batch
-python str/scripts/data/smoke_test_graph_batch.py --split train --batch-size 8
-python str/scripts/data/smoke_test_graph_batch.py --split valid --batch-size 8 \
-  --report-json str/manifest/esm_affinity_graph_batch_smoke_valid_report.json
-python str/scripts/data/smoke_test_graph_batch.py --split test --batch-size 8 \
-  --report-json str/manifest/esm_affinity_graph_batch_smoke_test_report.json
-
-# 7. 在 Linux GPU 上缓存 ESM residue embedding
-python str/scripts/data/cache_esm_embeddings.py \
-  --manifest str/manifest/esm_affinity_trainable_manifest.csv \
-  --model-name facebook/esm2_t12_35M_UR50D \
-  --cache-dir str/manifest/cache/esm_embeddings \
-  --report-json str/manifest/cache/esm_embeddings_report.json \
-  --device cuda \
-  --float16-output
-
-# 8. 合并 ESM embedding 与 ligand graph，验证训练 batch
-python str/scripts/data/build_training_batch.py \
-  --manifest str/manifest/esm_affinity_trainable_manifest.csv \
-  --esm-cache-dir str/manifest/cache/esm_embeddings \
-  --ligand-cache-dir str/manifest/cache/ligand_graphs \
-  --report-json str/manifest/esm_ligand_training_batch_report.json \
-  --split train \
-  --limit 128 \
-  --batch-size 8
-```
-
-执行完成后，应得到当前阶段的核心产物：
-
-```text
-str/manifest/esm_affinity_manifest.csv
-str/manifest/esm_affinity_trainable_manifest.csv
-str/manifest/cache/ligand_graphs/
-str/manifest/cache/esm_embeddings/
-str/manifest/esm_ligand_training_batch_report.json
-```
-
-当前已知数据规模：
-
-```text
-完整 manifest: 19037
-train / valid / test: 17608 / 1038 / 391
-trainable manifest: 19033
-过滤 ligand: 2pll, 3vjs, 3vjt, 4hrd
-trainable train / valid / test: 17604 / 1038 / 391
-```
-
-### 3.1 生成完整 manifest
-
-如果 `str/manifest/` 被误删，且结构级 split 已经存在，可以直接运行一键恢复脚本：
+一键从结构级 split 生成 manifest：
 
 ```bash
 PYTHONPATH=$(pwd) bash str/scripts/build_manifest_from_split.sh
 ```
 
-运行时会输出每一阶段的 `[START] / [DONE] / [FAIL]` 状态、耗时，并在逐样本处理阶段显示 `tqdm` 进度条：
+该脚本会分阶段输出：
 
 ```text
 [START] [1/4] Build full ESM affinity manifest
-Extract protein sequences: 100%|...| 19037/19037
-[DONE] [1/4] Build full ESM affinity manifest
-
+[DONE]  [1/4] ...
 [START] [2/4] Validate manifest paths, labels, sequences, and split membership
-Parse ligands: 100%|...| 19037/19037
-[DONE] [2/4] Validate manifest paths, labels, sequences, and split membership
-
+[DONE]  [2/4] ...
 [START] [3/4] Create trainable manifest by filtering unparseable ligands
-Filter trainable ligands: 100%|...| 19037/19037
-[DONE] [3/4] Create trainable manifest by filtering unparseable ligands
+[DONE]  [3/4] ...
+[START] [4/4] Summary
+[DONE]  [4/4] Summary
 ```
 
-该脚本默认使用：
+默认输入：
 
 ```text
 SOURCE_CSV=data/processed/sequence_cluster_split_all_raw/pdbbind_sequence_cluster_splits.csv
 SPLIT_DIR=str/split_sequence_cluster_all_raw
 MANIFEST_DIR=str/manifest
-LIGAND_PARSE_LIMIT=-1
 ```
 
-输出：
+默认输出：
 
 ```text
 str/manifest/esm_affinity_manifest.csv
@@ -514,402 +284,150 @@ str/manifest/ligand_parse_failures.csv
 str/manifest/esm_affinity_trainable_manifest_report.json
 ```
 
-如果你的 split source CSV 位于其他位置，可用环境变量覆盖：
+如果路径不同，可用环境变量覆盖：
 
 ```bash
 SOURCE_CSV=data/processed/sequence_cluster_split_all_raw/pdbbind_sequence_cluster_splits.csv \
 SPLIT_DIR=str/split_sequence_cluster_all_raw \
 MANIFEST_DIR=str/manifest \
-LIGAND_PARSE_LIMIT=-1 \
-bash str/scripts/build_manifest_from_split.sh
+PYTHONPATH=$(pwd) bash str/scripts/build_manifest_from_split.sh
 ```
 
-也可以手动分步执行：
+### 4.3 生成 manifest 后的验证、缓存与 batch 检查
+
+运行：
 
 ```bash
-python str/scripts/data/create_esm_manifest.py \
-  --source-csv data/processed/sequence_cluster_split_all_raw/pdbbind_sequence_cluster_splits.csv \
-  --split-dir str/split_sequence_cluster_all_raw
+PYTHONPATH=$(pwd) bash str/scripts/validate_after_manifest.sh
 ```
 
-默认输出：
+这个脚本会继续完成从 manifest 到训练 batch 的全部准备工作：
 
 ```text
-str/manifest/esm_affinity_manifest.csv
-str/manifest/esm_affinity_manifest_report.json
-str/manifest/general_PL_2020_sequence_cluster_all_raw.csv
+[1/6] Validate full manifest paths, labels, sequences, and splits
+[2/6] Create trainable manifest by filtering unparseable ligands
+[3/6] Cache RDKit ligand graph tensors
+[4/6] Cache frozen ESM residue embeddings
+[5/6] Smoke test ligand graph batch
+[6/6] Validate ESM + ligand training batch
 ```
 
-当前结果：
+长耗时步骤会显示 `tqdm` 进度条，包括：
 
 ```text
-rows: 19037
-train / valid / test: 17608 / 1038 / 391
-missing labels: 0
-empty protein sequence: 0
+Parse ligands
+Filter trainable ligands
+Cache ligand graphs
+Cache ESM embeddings
+Check ESM/ligand cache
 ```
 
-### 3.2 验证 manifest
-
-核心验证：
+常用可调参数：
 
 ```bash
-python str/scripts/data/validate_manifest.py \
-  --split-dir str/split_sequence_cluster_all_raw \
-  --ligand-parse-limit 0
-```
-
-全量 ligand 解析验证：
-
-```bash
-python str/scripts/data/validate_manifest.py \
-  --split-dir str/split_sequence_cluster_all_raw \
-  --ligand-parse-limit -1
-```
-
-当前全量验证结果：
-
-```text
-rows: 19037
-errors: 0
-status: PASS
-RDKit ligand parse success: 19033 / 19037
-RDKit ligand parse failure: 4
-```
-
-失败 ligand：
-
-```text
-2pll
-3vjs
-3vjt
-4hrd
-```
-
-### 3.3 生成可训练 manifest
-
-```bash
-python str/scripts/data/create_trainable_manifest.py
-```
-
-输出：
-
-```text
-str/manifest/esm_affinity_trainable_manifest.csv
-str/manifest/ligand_parse_failures.csv
-str/manifest/esm_affinity_trainable_manifest_report.json
-```
-
-当前结果：
-
-```text
-input rows: 19037
-trainable rows: 19033
-filtered rows: 4
-train / valid / test: 17604 / 1038 / 391
-```
-
-### 3.4 缓存 ligand graph
-
-小样本调试：
-
-```bash
-python str/scripts/data/cache_ligand_graphs.py \
-  --limit 100 \
-  --report-json str/manifest/cache/ligand_graphs_report_debug.json \
-  --overwrite
-```
-
-全量缓存：
-
-```bash
-python str/scripts/data/cache_ligand_graphs.py
-```
-
-输出：
-
-```text
-str/manifest/cache/ligand_graphs/
-str/manifest/cache/ligand_graphs_report.json
-```
-
-当前结果：
-
-```text
-cached graph files: 19033
-failures: 0
-num_atoms min / max / mean: 6 / 370 / 61.37
-directed_edges mean: 126.68
-```
-
-### 3.5 验证 graph batch
-
-```bash
-python str/scripts/data/smoke_test_graph_batch.py --split train --batch-size 8
-python str/scripts/data/smoke_test_graph_batch.py --split valid --batch-size 8 \
-  --report-json str/manifest/esm_affinity_graph_batch_smoke_valid_report.json
-python str/scripts/data/smoke_test_graph_batch.py --split test --batch-size 8 \
-  --report-json str/manifest/esm_affinity_graph_batch_smoke_test_report.json
-```
-
-当前结果：
-
-```text
-train graph batch: PASS
-  protein token shape: [8, 591]
-  ligand atom feature shape: [361, 9]
-  ligand bond index shape: [2, 734]
-  label shape: [8]
-
-valid graph batch: PASS
-  protein token shape: [8, 553]
-  ligand atom feature shape: [641, 9]
-  ligand bond index shape: [2, 1342]
-  label shape: [8]
-
-test graph batch: PASS
-  protein token shape: [8, 601]
-  ligand atom feature shape: [487, 9]
-  ligand bond index shape: [2, 1002]
-  label shape: [8]
-```
-
-### 3.6 缓存 ESM embedding
-
-Mac 本地小样本验证：
-
-```bash
-python str/scripts/data/cache_esm_embeddings.py \
-  --manifest str/manifest/esm_affinity_trainable_manifest.csv \
-  --model-name facebook/esm2_t6_8M_UR50D \
-  --cache-dir str/manifest/cache/esm_embeddings_debug \
-  --report-json str/manifest/cache/esm_embeddings_report_debug.json \
-  --limit 20 \
-  --device auto \
-  --overwrite
-```
-
-当前结果：
-
-```text
-rows: 20
-written: 20
-failures: 0
-device: mps
-hidden_dim: 320
-sequence_length min / max / mean: 105 / 1239 / 365.4
-```
-
-样例 embedding：
-
-```text
-10gs.pt: [416, 320]
-11gs.pt: [416, 320]
-13gs.pt: [418, 320]
-16pk.pt: [415, 320]
-1a07.pt: [209, 320]
+MANIFEST=str/manifest/esm_affinity_manifest.csv
+TRAINABLE_MANIFEST=str/manifest/esm_affinity_trainable_manifest.csv
+SPLIT_DIR=str/split_sequence_cluster_all_raw
+LIGAND_CACHE_DIR=str/manifest/cache/ligand_graphs
+ESM_CACHE_DIR=str/manifest/cache/esm_embeddings
+ESM_MODEL_NAME=facebook/esm2_t6_8M_UR50D
+ESM_DEVICE=cuda
+ESM_LIMIT=-1
+ESM_FLOAT16_OUTPUT=1
+BATCH_SPLIT=train
+BATCH_LIMIT=128
+BATCH_SIZE=8
+GRAPH_BATCH_REPORT=str/manifest/esm_affinity_graph_batch_smoke_report.json
+BATCH_REPORT=str/manifest/esm_ligand_training_batch_report.json
 ```
 
 Linux GPU 全量缓存建议：
 
 ```bash
-python str/scripts/data/cache_esm_embeddings.py \
-  --manifest str/manifest/esm_affinity_trainable_manifest.csv \
-  --model-name facebook/esm2_t12_35M_UR50D \
-  --cache-dir str/manifest/cache/esm_embeddings \
-  --report-json str/manifest/cache/esm_embeddings_report.json \
-  --device cuda \
-  --float16-output
+ESM_MODEL_NAME=facebook/esm2_t6_8M_UR50D \
+ESM_DEVICE=cuda \
+ESM_LIMIT=-1 \
+ESM_FLOAT16_OUTPUT=1 \
+PYTHONPATH=$(pwd) bash str/scripts/validate_after_manifest.sh
 ```
 
-### 3.7 构造 ESM + ligand graph 训练 batch
-
-该步骤把以下两个缓存按 `pdb_id` 合并：
-
-```text
-str/manifest/cache/esm_embeddings/{pdb_id}.pt
-str/manifest/cache/ligand_graphs/{pdb_id}.pt
-```
-
-输出 batch 字段：
-
-```text
-pdb_id
-split
-protein_embedding          [batch_size, max_protein_len, esm_hidden_dim]
-protein_mask               [batch_size, max_protein_len]
-protein_lengths            [batch_size]
-ligand_atom_features       [total_atoms, 9]
-ligand_atom_coordinates    [total_atoms, 3]
-ligand_bond_index          [2, total_directed_edges]
-ligand_bond_features       [total_directed_edges, 4]
-ligand_batch               [total_atoms]
-labels                     [batch_size]
-```
-
-Mac 本地 debug cache 验证：
-
-```bash
-python str/scripts/data/build_training_batch.py \
-  --manifest str/manifest/esm_affinity_trainable_manifest.csv \
-  --esm-cache-dir str/manifest/cache/esm_embeddings_debug \
-  --ligand-cache-dir str/manifest/cache/ligand_graphs \
-  --report-json str/manifest/esm_ligand_training_batch_debug_report.json \
-  --split train \
-  --limit 20 \
-  --batch-size 4
-```
-
-当前本地 debug 验证结果：
-
-```text
-status: PASS
-protein_embedding: [4, 418, 320]
-ligand_atom_features: [223, 9]
-ligand_bond_index: [2, 456]
-labels: [4]
-```
-
-Linux GPU 全量 cache 验证：
-
-```bash
-python str/scripts/data/build_training_batch.py \
-  --manifest str/manifest/esm_affinity_trainable_manifest.csv \
-  --esm-cache-dir str/manifest/cache/esm_embeddings \
-  --ligand-cache-dir str/manifest/cache/ligand_graphs \
-  --report-json str/manifest/esm_ligand_training_batch_report.json \
-  --split train \
-  --limit 128 \
-  --batch-size 8
-```
-
-如需随机抽样检查，可额外添加：
-
-```bash
---sample-mode random --seed 42
-```
-
-## 4. 未来步骤
-
-### 4.1 完成全量 ESM embedding 缓存
-
-Mac 已完成 20 条样本验证。下一步应在 Linux GPU 上全量缓存：
-
-```text
-input:  str/manifest/esm_affinity_trainable_manifest.csv
-output: str/manifest/cache/esm_embeddings/
-```
-
-建议先用：
+如果显存和时间允许，可将模型换为：
 
 ```text
 facebook/esm2_t12_35M_UR50D
-```
-
-显存和时间允许后，再尝试：
-
-```text
 facebook/esm2_t30_150M_UR50D
 ```
 
-### 4.2 验证 ESM + ligand graph dataloader
+### 4.4 训练 frozen ESM baseline
 
-已实现：
-
-```text
-str/scripts/data/build_training_batch.py
-```
-
-该脚本会检查 ESM cache 与 ligand graph cache 是否齐全，并构造训练 batch。Linux 全量缓存完成后，应先运行：
+运行：
 
 ```bash
-python str/scripts/data/build_training_batch.py \
-  --esm-cache-dir str/manifest/cache/esm_embeddings \
-  --ligand-cache-dir str/manifest/cache/ligand_graphs \
-  --split train \
-  --limit 128 \
-  --batch-size 8
+PYTHONPATH=$(pwd) bash str/scripts/run_frozen_esm_baseline.sh
 ```
 
-### 4.3 训练 frozen ESM baseline
-
-已实现：
+这个脚本会先验证训练 batch，再启动 baseline：
 
 ```text
-str/scripts/train/train_frozen_esm_baseline.py
+[1/2] Validate training batch before baseline
+[2/2] Train frozen ESM baseline
 ```
 
-第一版模型保持简单，作为后续 GNN / pocket pooling / cross-attention 的对照基线：
+训练循环会显示 epoch 和 batch 级 `tqdm` 进度条。
 
-```text
-protein_embedding + protein_mask -> masked mean pooling
-ligand_atom_features + ligand_batch -> atom mean pooling
-concat -> MLP -> pAffinity
-loss: MSELoss
-```
-
-本地或服务器小规模 smoke train：
+常用可调参数：
 
 ```bash
-PYTHONPATH=$(pwd) python str/scripts/train/train_frozen_esm_baseline.py \
-  --esm-cache-dir str/manifest/cache/esm_embeddings \
-  --ligand-cache-dir str/manifest/cache/ligand_graphs \
-  --train-limit 512 \
-  --valid-limit 128 \
-  --test-limit 128 \
-  --epochs 3 \
-  --batch-size 8 \
-  --device cuda
+MANIFEST=str/manifest/esm_affinity_trainable_manifest.csv
+ESM_CACHE_DIR=str/manifest/cache/esm_embeddings
+LIGAND_CACHE_DIR=str/manifest/cache/ligand_graphs
+OUTPUT_DIR=str/manifest/outputs/baseline_frozen_esm
+
+TRAIN_LIMIT=-1
+VALID_LIMIT=-1
+TEST_LIMIT=-1
+EPOCHS=30
+BATCH_SIZE=16
+HIDDEN_DIM=256
+DROPOUT=0.1
+LR=1e-3
+WEIGHT_DECAY=1e-4
+LOSS=mse
+DEVICE=cuda
+PRETRAIN_CHECK_LIMIT=128
 ```
 
-如果只想用本地 debug ESM cache 验证脚本逻辑，可临时把 train split 当作 valid/test：
+小规模 smoke train：
 
 ```bash
-PYTHONPATH=$(pwd) python str/scripts/train/train_frozen_esm_baseline.py \
-  --esm-cache-dir str/manifest/cache/esm_embeddings_debug \
-  --ligand-cache-dir str/manifest/cache/ligand_graphs \
-  --train-split train \
-  --valid-split train \
-  --test-split train \
-  --train-limit 12 \
-  --valid-limit 4 \
-  --test-limit 4 \
-  --epochs 2 \
-  --batch-size 4 \
-  --device auto \
-  --output-dir str/manifest/outputs/baseline_frozen_esm_debug
+TRAIN_LIMIT=512 \
+VALID_LIMIT=128 \
+TEST_LIMIT=128 \
+EPOCHS=3 \
+BATCH_SIZE=8 \
+DEVICE=cuda \
+OUTPUT_DIR=str/manifest/outputs/baseline_frozen_esm_smoke \
+PYTHONPATH=$(pwd) bash str/scripts/run_frozen_esm_baseline.sh
 ```
 
-当前本地 debug 训练验证结果：
-
-```text
-status: PASS
-epochs: 2
-train rows / valid rows / test rows: 12 / 4 / 4
-best epoch: 2
-valid RMSE: 4.2290
-test RMSE: 4.2290
-output: str/manifest/outputs/baseline_frozen_esm_debug/
-```
-
-Linux GPU 全量 baseline：
+全量 baseline：
 
 ```bash
-PYTHONPATH=$(pwd) python str/scripts/train/train_frozen_esm_baseline.py \
-  --esm-cache-dir str/manifest/cache/esm_embeddings \
-  --ligand-cache-dir str/manifest/cache/ligand_graphs \
-  --epochs 30 \
-  --batch-size 16 \
-  --hidden-dim 256 \
-  --lr 1e-3 \
-  --weight-decay 1e-4 \
-  --device cuda
+EPOCHS=30 \
+BATCH_SIZE=16 \
+HIDDEN_DIM=256 \
+LR=1e-3 \
+WEIGHT_DECAY=1e-4 \
+DEVICE=cuda \
+OUTPUT_DIR=str/manifest/outputs/baseline_frozen_esm \
+PYTHONPATH=$(pwd) bash str/scripts/run_frozen_esm_baseline.sh
 ```
 
-输出：
+训练输出：
 
 ```text
 str/manifest/outputs/baseline_frozen_esm/
+├── pretrain_batch_check.json
 ├── checkpoints/
 │   └── best.pt
 ├── metrics.json
@@ -918,33 +436,149 @@ str/manifest/outputs/baseline_frozen_esm/
 └── predictions_test.csv
 ```
 
-### 4.4 升级模型
+重点查看：
 
-按风险从低到高推进：
-
-```text
-frozen ESM + Morgan fingerprint
-frozen ESM + ligand GNN
-frozen ESM + pocket pooling
-pocket residue embedding + ligand atom cross-attention
-partial fine-tuning / LoRA
+```bash
+cat str/manifest/outputs/baseline_frozen_esm/metrics.json
 ```
 
-### 4.5 最终报告
+## 5. QuickStart
 
-固定使用当前 sequence-cluster all-raw split，并报告：
+从已经切分好的结构数据开始，完整跑到 baseline：
 
-```text
-train / valid / test: 17604 / 1038 / 391
-sequence leakage: identity >= 40%, coverage >= 0.8, violation = 0
+```bash
+cd /tmp/ai4s/ai4s_final
+git switch str
+git pull
+
+conda create -n ai4s python=3.11 -y
+conda activate ai4s
+python -m pip install --upgrade pip
+
+# Linux GPU 示例；如果服务器已经有可用 CUDA 版 PyTorch，可跳过这一行
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+pip install -r str/requirements.txt
+
+PYTHONPATH=$(pwd) bash str/scripts/build_manifest_from_split.sh
+
+ESM_MODEL_NAME=facebook/esm2_t6_8M_UR50D \
+ESM_DEVICE=cuda \
+ESM_LIMIT=-1 \
+ESM_FLOAT16_OUTPUT=1 \
+BATCH_SPLIT=train \
+BATCH_LIMIT=128 \
+BATCH_SIZE=8 \
+PYTHONPATH=$(pwd) bash str/scripts/validate_after_manifest.sh
+
+TRAIN_LIMIT=512 \
+VALID_LIMIT=128 \
+TEST_LIMIT=128 \
+EPOCHS=3 \
+BATCH_SIZE=8 \
+DEVICE=cuda \
+OUTPUT_DIR=str/manifest/outputs/baseline_frozen_esm_smoke \
+PYTHONPATH=$(pwd) bash str/scripts/run_frozen_esm_baseline.sh
+
+EPOCHS=30 \
+BATCH_SIZE=16 \
+HIDDEN_DIM=256 \
+LR=1e-3 \
+WEIGHT_DECAY=1e-4 \
+DEVICE=cuda \
+OUTPUT_DIR=str/manifest/outputs/baseline_frozen_esm \
+PYTHONPATH=$(pwd) bash str/scripts/run_frozen_esm_baseline.sh
 ```
 
-每个模型至少报告：
+如果只想先确认脚本参数和路径，可先运行：
+
+```bash
+ESM_LIMIT=32 \
+LIGAND_CACHE_LIMIT=32 \
+BATCH_LIMIT=16 \
+BATCH_SIZE=4 \
+TRAIN_LIMIT=32 \
+VALID_LIMIT=16 \
+TEST_LIMIT=16 \
+EPOCHS=1 \
+DEVICE=cuda \
+OUTPUT_DIR=str/manifest/outputs/baseline_frozen_esm_debug \
+PYTHONPATH=$(pwd) bash str/scripts/run_frozen_esm_baseline.sh
+```
+
+注意：上面的 debug 命令要求对应的 ESM cache 和 ligand graph cache 已经存在。若只缓存了前 32 条样本，batch 随机抽样可能命中未缓存样本；完整实验建议直接全量缓存。
+
+## 6. 下一步改进方向
+
+baseline 跑通后，后续不应只调 MLP，而应逐步加入结构建模能力。
+
+### 6.1 Ligand GNN
+
+当前 ligand 表示只是 atom mean pooling。下一步可以把 cached ligand graph 输入 GCN、GINE、GraphSAGE 或 Graph Transformer，得到更强的小分子表示：
 
 ```text
-RMSE
-MAE
-R2
-Pearson
-Spearman
+atom_features + bond_index + bond_features -> ligand GNN -> ligand vector
 ```
+
+目标是替代简单的 atom mean pooling。
+
+### 6.2 Pocket-aware protein pooling
+
+当前 protein 使用全序列 mean pooling，可能稀释结合口袋信号。下一步可以根据 `pocket.pdb` 中的残基位置或 pocket chain/residue 编号，只池化 pocket residue 的 ESM embedding：
+
+```text
+protein ESM residue embedding -> pocket residue mask -> pocket mean / attention pooling
+```
+
+这一步通常比直接全序列 pooling 更符合任务目标。
+
+### 6.3 Protein-ligand cross attention
+
+进一步可以让 ligand atom 表示与 pocket residue 表示交互：
+
+```text
+pocket residue embeddings <-> ligand atom embeddings
+cross-attention / pair bias / distance bias
+```
+
+如果加入结构距离，可从 complex 结构中构建 residue-atom 距离矩阵或接触图。
+
+### 6.4 引入三维结构特征
+
+目前 ligand graph 保存了 atom coordinates，但 baseline 没有使用。后续可以加入：
+
+```text
+ligand 3D distance
+pocket residue coordinates
+residue-atom distance
+contact map
+SE(3)-aware / EGNN / equivariant block
+```
+
+这会更贴近“给定蛋白-小分子复合物三维结构预测亲和力”的目标。
+
+### 6.5 ESM 微调或参数高效微调
+
+在 baseline 稳定后，可以尝试：
+
+```text
+frozen ESM cache
+-> last-layer fine-tuning
+-> LoRA / adapter tuning
+```
+
+但不建议一开始就端到端微调 ESM，因为显存、速度和过拟合风险都更高。应先保留 frozen ESM baseline 作为对照。
+
+### 6.6 实验记录与对照
+
+每个非 baseline 方向都应保留相同 split 和相同评估指标：
+
+```text
+valid RMSE / MAE / Pearson / Spearman
+test RMSE / MAE / Pearson / Spearman
+best checkpoint by valid RMSE
+predictions_valid.csv
+predictions_test.csv
+```
+
+这样才能判断改进来自模型结构，而不是数据划分或评估方式变化。

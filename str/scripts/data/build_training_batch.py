@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
+from tqdm.auto import tqdm
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -134,7 +135,8 @@ def select_manifest_rows(manifest_path: Path, split: str, limit: int, seed: int,
 def validate_cache_presence(manifest: pd.DataFrame, esm_cache_dir: Path, ligand_cache_dir: Path) -> dict[str, Any]:
     missing_esm = []
     missing_ligand = []
-    for pdb_id in manifest["pdb_id"].astype(str):
+    pdb_ids = manifest["pdb_id"].astype(str).tolist()
+    for pdb_id in tqdm(pdb_ids, desc="Check ESM/ligand cache", unit="sample"):
         if not (esm_cache_dir / f"{pdb_id}.pt").exists():
             missing_esm.append(pdb_id)
         if not (ligand_cache_dir / f"{pdb_id}.pt").exists():
