@@ -8,18 +8,18 @@
 
 ```text
 final_project/
-├── scripts/
-│   └── data/
-│       ├── create_esm_manifest.py
-│       ├── validate_manifest.py
-│       ├── smoke_test_manifest_batch.py
-│       ├── create_trainable_manifest.py
-│       ├── cache_ligand_graphs.py
-│       ├── smoke_test_graph_batch.py
-│       └── cache_esm_embeddings.py
 ├── str/
 │   ├── README.md
 │   ├── requirements.txt
+│   ├── scripts/
+│   │   └── data/
+│   │       ├── create_esm_manifest.py
+│   │       ├── validate_manifest.py
+│   │       ├── smoke_test_manifest_batch.py
+│   │       ├── create_trainable_manifest.py
+│   │       ├── cache_ligand_graphs.py
+│   │       ├── smoke_test_graph_batch.py
+│   │       └── cache_esm_embeddings.py
 │   ├── split_sequence_cluster_all_raw/
 │   │   ├── timesplit_no_lig_overlap_train
 │   │   ├── timesplit_no_lig_overlap_val
@@ -202,7 +202,7 @@ Spearman
 ### 3.1 生成完整 manifest
 
 ```bash
-python scripts/data/create_esm_manifest.py \
+python str/scripts/data/create_esm_manifest.py \
   --split-dir str/split_sequence_cluster_all_raw
 ```
 
@@ -228,7 +228,7 @@ empty protein sequence: 0
 核心验证：
 
 ```bash
-python scripts/data/validate_manifest.py \
+python str/scripts/data/validate_manifest.py \
   --split-dir str/split_sequence_cluster_all_raw \
   --ligand-parse-limit 0
 ```
@@ -236,7 +236,7 @@ python scripts/data/validate_manifest.py \
 全量 ligand 解析验证：
 
 ```bash
-python scripts/data/validate_manifest.py \
+python str/scripts/data/validate_manifest.py \
   --split-dir str/split_sequence_cluster_all_raw \
   --ligand-parse-limit -1
 ```
@@ -263,7 +263,7 @@ RDKit ligand parse failure: 4
 ### 3.3 生成可训练 manifest
 
 ```bash
-python scripts/data/create_trainable_manifest.py
+python str/scripts/data/create_trainable_manifest.py
 ```
 
 输出：
@@ -288,7 +288,7 @@ train / valid / test: 17604 / 1038 / 391
 小样本调试：
 
 ```bash
-python scripts/data/cache_ligand_graphs.py \
+python str/scripts/data/cache_ligand_graphs.py \
   --limit 100 \
   --report-json str/manifest/cache/ligand_graphs_report_debug.json \
   --overwrite
@@ -297,7 +297,7 @@ python scripts/data/cache_ligand_graphs.py \
 全量缓存：
 
 ```bash
-python scripts/data/cache_ligand_graphs.py
+python str/scripts/data/cache_ligand_graphs.py
 ```
 
 输出：
@@ -319,10 +319,10 @@ directed_edges mean: 126.68
 ### 3.5 验证 graph batch
 
 ```bash
-python scripts/data/smoke_test_graph_batch.py --split train --batch-size 8
-python scripts/data/smoke_test_graph_batch.py --split valid --batch-size 8 \
+python str/scripts/data/smoke_test_graph_batch.py --split train --batch-size 8
+python str/scripts/data/smoke_test_graph_batch.py --split valid --batch-size 8 \
   --report-json str/manifest/esm_affinity_graph_batch_smoke_valid_report.json
-python scripts/data/smoke_test_graph_batch.py --split test --batch-size 8 \
+python str/scripts/data/smoke_test_graph_batch.py --split test --batch-size 8 \
   --report-json str/manifest/esm_affinity_graph_batch_smoke_test_report.json
 ```
 
@@ -353,7 +353,7 @@ test graph batch: PASS
 Mac 本地小样本验证：
 
 ```bash
-python scripts/data/cache_esm_embeddings.py \
+python str/scripts/data/cache_esm_embeddings.py \
   --manifest str/manifest/esm_affinity_trainable_manifest.csv \
   --model-name facebook/esm2_t6_8M_UR50D \
   --cache-dir str/manifest/cache/esm_embeddings_debug \
@@ -387,7 +387,7 @@ sequence_length min / max / mean: 105 / 1239 / 365.4
 Linux GPU 全量缓存建议：
 
 ```bash
-python scripts/data/cache_esm_embeddings.py \
+python str/scripts/data/cache_esm_embeddings.py \
   --manifest str/manifest/esm_affinity_trainable_manifest.csv \
   --model-name facebook/esm2_t12_35M_UR50D \
   --cache-dir str/manifest/cache/esm_embeddings \
