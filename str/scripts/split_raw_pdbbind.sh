@@ -16,11 +16,131 @@ SEEDS="${SEEDS:-128}"
 UNIVERSE="${UNIVERSE:-all_raw}"
 ALL_VS_ALL_M8="${ALL_VS_ALL_M8:-}"
 
+usage() {
+  cat <<'EOF'
+Usage: bash str/scripts/split_raw_pdbbind.sh [options]
+
+Options:
+  --iid true|false            true: random PDB-complex split; false: sequence-similarity-constrained PDB-complex split.
+                              Overrides the IID environment variable.
+  --index-path PATH           PDBbind INDEX_general_PL file.
+  --complex-root PATH         PDBbind P-L complex root.
+  --source-split-dir PATH     Source Interformer split directory for ratios/subset files.
+  --output-split-dir PATH     Output Interformer-format split directory.
+  --output-dir PATH           Output processed split report/table directory.
+  --seed N                    Random seed for IID split.
+  --min-seq-id FLOAT          Sequence identity threshold for constrained split.
+  --coverage FLOAT            Coverage threshold for constrained split and validation.
+  --min-length N              Minimum protein-chain length used for sequence checks.
+  --seeds N                   Number of component-assignment seeds for constrained split.
+  --universe NAME             interformer_assigned or all_raw.
+  --all-vs-all-m8 PATH        Optional precomputed MMseqs all-vs-all result.
+  -h, --help                  Show this help message.
+
+Defaults can also be edited in this script or provided as environment variables.
+Argument priority: command-line option > environment variable > bash default.
+EOF
+}
+
+require_arg_value() {
+  local option="$1"
+  local value="${2:-}"
+  if [[ -z "${value}" || "${value}" == --* ]]; then
+    echo "Missing value for ${option}" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
+OUTPUT_SPLIT_DIR_ARG=""
+OUTPUT_DIR_ARG=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --iid)
+      require_arg_value "$1" "${2:-}"
+      IID="$2"
+      shift 2
+      ;;
+    --index-path)
+      require_arg_value "$1" "${2:-}"
+      INDEX_PATH="$2"
+      shift 2
+      ;;
+    --complex-root)
+      require_arg_value "$1" "${2:-}"
+      COMPLEX_ROOT="$2"
+      shift 2
+      ;;
+    --source-split-dir)
+      require_arg_value "$1" "${2:-}"
+      SOURCE_SPLIT_DIR="$2"
+      shift 2
+      ;;
+    --output-split-dir)
+      require_arg_value "$1" "${2:-}"
+      OUTPUT_SPLIT_DIR_ARG="$2"
+      shift 2
+      ;;
+    --output-dir)
+      require_arg_value "$1" "${2:-}"
+      OUTPUT_DIR_ARG="$2"
+      shift 2
+      ;;
+    --seed)
+      require_arg_value "$1" "${2:-}"
+      SEED="$2"
+      shift 2
+      ;;
+    --min-seq-id)
+      require_arg_value "$1" "${2:-}"
+      MIN_SEQ_ID="$2"
+      shift 2
+      ;;
+    --coverage)
+      require_arg_value "$1" "${2:-}"
+      COVERAGE="$2"
+      shift 2
+      ;;
+    --min-length)
+      require_arg_value "$1" "${2:-}"
+      MIN_LENGTH="$2"
+      shift 2
+      ;;
+    --seeds)
+      require_arg_value "$1" "${2:-}"
+      SEEDS="$2"
+      shift 2
+      ;;
+    --universe)
+      require_arg_value "$1" "${2:-}"
+      UNIVERSE="$2"
+      shift 2
+      ;;
+    --all-vs-all-m8)
+      require_arg_value "$1" "${2:-}"
+      ALL_VS_ALL_M8="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
 IID_LOWER="$(printf '%s' "${IID}" | tr '[:upper:]' '[:lower:]')"
 if [[ "${IID_LOWER}" == "true" || "${IID_LOWER}" == "1" || "${IID_LOWER}" == "yes" ]]; then
   IID_MODE="true"
-else
+elif [[ "${IID_LOWER}" == "false" || "${IID_LOWER}" == "0" || "${IID_LOWER}" == "no" ]]; then
   IID_MODE="false"
+else
+  echo "Invalid IID value: ${IID}. Use true or false." >&2
+  exit 2
 fi
 
 if [[ "${IID_MODE}" == "true" ]]; then
@@ -31,8 +151,8 @@ else
   DEFAULT_OUTPUT_DIR="data/processed/sequence_cluster_split_all_raw"
 fi
 
-OUTPUT_SPLIT_DIR="${OUTPUT_SPLIT_DIR:-${DEFAULT_OUTPUT_SPLIT_DIR}}"
-OUTPUT_DIR="${OUTPUT_DIR:-${DEFAULT_OUTPUT_DIR}}"
+OUTPUT_SPLIT_DIR="${OUTPUT_SPLIT_DIR_ARG:-${OUTPUT_SPLIT_DIR:-${DEFAULT_OUTPUT_SPLIT_DIR}}}"
+OUTPUT_DIR="${OUTPUT_DIR_ARG:-${OUTPUT_DIR:-${DEFAULT_OUTPUT_DIR}}}"
 ASSIGNED_CSV="${ASSIGNED_CSV:-${OUTPUT_DIR}/pdbbind_sequence_cluster_splits.csv}"
 LEAKAGE_OUTPUT_DIR="${LEAKAGE_OUTPUT_DIR:-${OUTPUT_DIR}/sequence_leakage_check}"
 
