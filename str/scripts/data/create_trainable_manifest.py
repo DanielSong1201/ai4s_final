@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+from tqdm.auto import tqdm
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -80,7 +81,13 @@ def main() -> None:
     failure_rows = []
     parse_source_counts: dict[str, int] = {}
 
-    for row in df.itertuples(index=False):
+    rows_iter = tqdm(
+        df.itertuples(index=False),
+        total=len(df),
+        desc="Filter trainable ligands",
+        unit="ligand",
+    )
+    for row in rows_iter:
         mol, source, error = parse_ligand(row, Chem)
         parse_source_counts[source] = parse_source_counts.get(source, 0) + 1
         if mol is None:

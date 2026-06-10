@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+from tqdm.auto import tqdm
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -301,7 +302,14 @@ def validate_ligand_parsing(df: pd.DataFrame, issues: list[dict[str, object]], p
     failures = []
     success_count = 0
 
-    for row in sample.itertuples(index=False):
+    rows_iter = tqdm(
+        sample.itertuples(index=False),
+        total=len(sample),
+        desc="Parse ligands",
+        unit="ligand",
+        disable=parse_limit == 0,
+    )
+    for row in rows_iter:
         mol = None
         sdf_path = project_path(Path(row.ligand_sdf_path))
         mol2_path = project_path(Path(row.ligand_mol2_path))

@@ -11,6 +11,7 @@ from collections import Counter
 from pathlib import Path
 
 import pandas as pd
+from tqdm.auto import tqdm
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -276,7 +277,13 @@ def build_manifest(source_csv: Path, split_dir: Path) -> tuple[pd.DataFrame, dic
 
     sequence_rows = []
     sequence_failures = []
-    for row in manifest.itertuples(index=False):
+    rows_iter = tqdm(
+        manifest.itertuples(index=False),
+        total=len(manifest),
+        desc="Extract protein sequences",
+        unit="complex",
+    )
+    for row in rows_iter:
         try:
             sequence, chain_json, chain_count, sequence_length = extract_sequences(row.protein_path)
         except Exception as exc:  # pragma: no cover - report exact bad rows instead of hiding them

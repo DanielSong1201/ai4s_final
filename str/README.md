@@ -17,6 +17,7 @@ final_project/
 │   ├── README.md
 │   ├── requirements.txt
 │   ├── scripts/
+│   │   ├── build_manifest_from_split.sh
 │   │   ├── data/
 │   │   │   ├── create_esm_manifest.py
 │   │   │   ├── validate_manifest.py
@@ -470,8 +471,64 @@ trainable train / valid / test: 17604 / 1038 / 391
 
 ### 3.1 生成完整 manifest
 
+如果 `str/manifest/` 被误删，且结构级 split 已经存在，可以直接运行一键恢复脚本：
+
+```bash
+PYTHONPATH=$(pwd) bash str/scripts/build_manifest_from_split.sh
+```
+
+运行时会输出每一阶段的 `[START] / [DONE] / [FAIL]` 状态、耗时，并在逐样本处理阶段显示 `tqdm` 进度条：
+
+```text
+[START] [1/4] Build full ESM affinity manifest
+Extract protein sequences: 100%|...| 19037/19037
+[DONE] [1/4] Build full ESM affinity manifest
+
+[START] [2/4] Validate manifest paths, labels, sequences, and split membership
+Parse ligands: 100%|...| 19037/19037
+[DONE] [2/4] Validate manifest paths, labels, sequences, and split membership
+
+[START] [3/4] Create trainable manifest by filtering unparseable ligands
+Filter trainable ligands: 100%|...| 19037/19037
+[DONE] [3/4] Create trainable manifest by filtering unparseable ligands
+```
+
+该脚本默认使用：
+
+```text
+SOURCE_CSV=data/processed/sequence_cluster_split_all_raw/pdbbind_sequence_cluster_splits.csv
+SPLIT_DIR=str/split_sequence_cluster_all_raw
+MANIFEST_DIR=str/manifest
+LIGAND_PARSE_LIMIT=-1
+```
+
+输出：
+
+```text
+str/manifest/esm_affinity_manifest.csv
+str/manifest/esm_affinity_manifest_report.json
+str/manifest/esm_affinity_manifest_validation_report.json
+str/manifest/general_PL_2020_sequence_cluster_all_raw.csv
+str/manifest/esm_affinity_trainable_manifest.csv
+str/manifest/ligand_parse_failures.csv
+str/manifest/esm_affinity_trainable_manifest_report.json
+```
+
+如果你的 split source CSV 位于其他位置，可用环境变量覆盖：
+
+```bash
+SOURCE_CSV=data/processed/sequence_cluster_split_all_raw/pdbbind_sequence_cluster_splits.csv \
+SPLIT_DIR=str/split_sequence_cluster_all_raw \
+MANIFEST_DIR=str/manifest \
+LIGAND_PARSE_LIMIT=-1 \
+bash str/scripts/build_manifest_from_split.sh
+```
+
+也可以手动分步执行：
+
 ```bash
 python str/scripts/data/create_esm_manifest.py \
+  --source-csv data/processed/sequence_cluster_split_all_raw/pdbbind_sequence_cluster_splits.csv \
   --split-dir str/split_sequence_cluster_all_raw
 ```
 
