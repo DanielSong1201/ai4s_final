@@ -6,7 +6,9 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 MANIFEST="${MANIFEST:-str/manifest/esm_affinity_trainable_manifest.csv}"
 ESM_CACHE_DIR="${ESM_CACHE_DIR:-str/manifest/cache/esm_embeddings}"
 LIGAND_CACHE_DIR="${LIGAND_CACHE_DIR:-str/manifest/cache/ligand_graphs}"
-OUTPUT_DIR="${OUTPUT_DIR:-str/manifest/outputs/baseline_frozen_esm}"
+POCKET_CACHE_DIR="${POCKET_CACHE_DIR:-str/manifest/cache/pocket_features}"
+POCKET_CACHE_REPORT="${POCKET_CACHE_REPORT:-${POCKET_CACHE_DIR%/}_report.json}"
+OUTPUT_DIR="${OUTPUT_DIR:-str/manifest/outputs/pocket_gnn_frozen_esm}"
 
 TRAIN_SPLIT="${TRAIN_SPLIT:-train}"
 VALID_SPLIT="${VALID_SPLIT:-valid}"
@@ -17,10 +19,20 @@ TEST_LIMIT="${TEST_LIMIT:--1}"
 SAMPLE_MODE="${SAMPLE_MODE:-head}"
 SEED="${SEED:-42}"
 
+POCKET_CACHE_LIMIT="${POCKET_CACHE_LIMIT:--1}"
+POCKET_OVERWRITE="${POCKET_OVERWRITE:-0}"
+FALLBACK_TO_FULL_SEQUENCE="${FALLBACK_TO_FULL_SEQUENCE:-1}"
+
 EPOCHS="${EPOCHS:-30}"
 BATCH_SIZE="${BATCH_SIZE:-16}"
 NUM_WORKERS="${NUM_WORKERS:-0}"
-HIDDEN_DIM="${HIDDEN_DIM:-256}"
+PROTEIN_HIDDEN_DIM="${PROTEIN_HIDDEN_DIM:-256}"
+PROTEIN_POOLING="${PROTEIN_POOLING:-pocket_attention}"
+GNN_TYPE="${GNN_TYPE:-gine}"
+GNN_LAYERS="${GNN_LAYERS:-3}"
+GNN_HIDDEN_DIM="${GNN_HIDDEN_DIM:-128}"
+LIGAND_POOLING="${LIGAND_POOLING:-mean}"
+FUSION_HIDDEN_DIM="${FUSION_HIDDEN_DIM:-256}"
 DROPOUT="${DROPOUT:-0.1}"
 LR="${LR:-1e-3}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-1e-4}"
@@ -34,19 +46,29 @@ export PYTHONPATH="${ROOT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 export TQDM_DISABLE="${TQDM_DISABLE:-0}"
 
-echo "Frozen ESM baseline training"
+echo "Frozen ESM + pocket-aware protein pooling + ligand GNN training"
 echo "ROOT_DIR=${ROOT_DIR}"
 echo "PYTHON_BIN=${PYTHON_BIN}"
 echo "MANIFEST=${MANIFEST}"
 echo "ESM_CACHE_DIR=${ESM_CACHE_DIR}"
 echo "LIGAND_CACHE_DIR=${LIGAND_CACHE_DIR}"
+echo "POCKET_CACHE_DIR=${POCKET_CACHE_DIR}"
 echo "OUTPUT_DIR=${OUTPUT_DIR}"
 echo "TRAIN_LIMIT=${TRAIN_LIMIT}"
 echo "VALID_LIMIT=${VALID_LIMIT}"
 echo "TEST_LIMIT=${TEST_LIMIT}"
+echo "POCKET_CACHE_LIMIT=${POCKET_CACHE_LIMIT}"
+echo "POCKET_OVERWRITE=${POCKET_OVERWRITE}"
+echo "FALLBACK_TO_FULL_SEQUENCE=${FALLBACK_TO_FULL_SEQUENCE}"
 echo "EPOCHS=${EPOCHS}"
 echo "BATCH_SIZE=${BATCH_SIZE}"
-echo "HIDDEN_DIM=${HIDDEN_DIM}"
+echo "PROTEIN_HIDDEN_DIM=${PROTEIN_HIDDEN_DIM}"
+echo "PROTEIN_POOLING=${PROTEIN_POOLING}"
+echo "GNN_TYPE=${GNN_TYPE}"
+echo "GNN_LAYERS=${GNN_LAYERS}"
+echo "GNN_HIDDEN_DIM=${GNN_HIDDEN_DIM}"
+echo "LIGAND_POOLING=${LIGAND_POOLING}"
+echo "FUSION_HIDDEN_DIM=${FUSION_HIDDEN_DIM}"
 echo "DROPOUT=${DROPOUT}"
 echo "LR=${LR}"
 echo "WEIGHT_DECAY=${WEIGHT_DECAY}"
@@ -85,7 +107,20 @@ require_path "${MANIFEST}" "trainable manifest"
 require_path "${ESM_CACHE_DIR}" "ESM cache directory"
 require_path "${LIGAND_CACHE_DIR}" "ligand graph cache directory"
 
-run_stage "[1/2] Validate training batch before baseline" \
+pocket_cache_args=(
+  --manifest "${MANIFEST}"
+  --cache-dir "${POCKET_CACHE_DIR}"
+  --report-json "${POCKET_CACHE_REPORT}"
+  --limit "${POCKET_CACHE_LIMIT}"
+)
+if [[ "${POCKET_OVERWRITE}" == "1" ]]; then
+  pocket_cache_args+=(--overwrite)
+fi
+
+run_stage "[1/3] Cache pocket residue masks" \
+  "${PYTHON_BIN}" str/scripts/data/cache_pocket_features.py "${pocket_cache_args[@]}"
+
+run_stage "[2/3] Validate ESM + ligand training batch before pocket GNN" \
   "${PYTHON_BIN}" str/scripts/data/build_training_batch.py \
     --manifest "${MANIFEST}" \
     --esm-cache-dir "${ESM_CACHE_DIR}" \
@@ -97,11 +132,17 @@ run_stage "[1/2] Validate training batch before baseline" \
     --sample-mode "${SAMPLE_MODE}" \
     --seed "${SEED}"
 
-run_stage "[2/2] Train frozen ESM baseline" \
-  "${PYTHON_BIN}" str/scripts/train/train_frozen_esm_baseline.py \
+fallback_arg="--no-fallback-to-full-sequence"
+if [[ "${FALLBACK_TO_FULL_SEQUENCE}" == "1" || "${FALLBACK_TO_FULL_SEQUENCE}" == "true" || "${FALLBACK_TO_FULL_SEQUENCE}" == "TRUE" ]]; then
+  fallback_arg="--fallback-to-full-sequence"
+fi
+
+run_stage "[3/3] Train frozen ESM + pocket-aware ligand GNN" \
+  "${PYTHON_BIN}" str/scripts/train/train_pocket_gnn_frozen_esm.py \
     --manifest "${MANIFEST}" \
     --esm-cache-dir "${ESM_CACHE_DIR}" \
     --ligand-cache-dir "${LIGAND_CACHE_DIR}" \
+    --pocket-cache-dir "${POCKET_CACHE_DIR}" \
     --output-dir "${OUTPUT_DIR}" \
     --train-split "${TRAIN_SPLIT}" \
     --valid-split "${VALID_SPLIT}" \
@@ -114,12 +155,19 @@ run_stage "[2/2] Train frozen ESM baseline" \
     --epochs "${EPOCHS}" \
     --batch-size "${BATCH_SIZE}" \
     --num-workers "${NUM_WORKERS}" \
-    --hidden-dim "${HIDDEN_DIM}" \
+    --protein-hidden-dim "${PROTEIN_HIDDEN_DIM}" \
+    --protein-pooling "${PROTEIN_POOLING}" \
+    --gnn-type "${GNN_TYPE}" \
+    --gnn-layers "${GNN_LAYERS}" \
+    --gnn-hidden-dim "${GNN_HIDDEN_DIM}" \
+    --ligand-pooling "${LIGAND_POOLING}" \
+    --fusion-hidden-dim "${FUSION_HIDDEN_DIM}" \
     --dropout "${DROPOUT}" \
     --lr "${LR}" \
     --weight-decay "${WEIGHT_DECAY}" \
     --loss "${LOSS}" \
     --grad-clip "${GRAD_CLIP}" \
-    --device "${DEVICE}"
+    --device "${DEVICE}" \
+    "${fallback_arg}"
 
-echo "Baseline completed. Outputs are in: ${OUTPUT_DIR}"
+echo "Pocket-aware ligand GNN completed. Outputs are in: ${OUTPUT_DIR}"

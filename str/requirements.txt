@@ -8,3 +8,5 @@ safetensors>=0.8.0
 accelerate
 tqdm>=4.68.1
 scikit-learn
+matplotlib
+tensorboard

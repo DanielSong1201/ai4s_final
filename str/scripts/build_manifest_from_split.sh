@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="${ROOT_DIR:-$(pwd)}"
 SPLIT_NAME="${SPLIT_NAME:-split}"
 SOURCE_CSV="${SOURCE_CSV:-}"
-SPLIT_DIR="${SPLIT_DIR:-str/split_sequence_cluster_all_raw}"
+SPLIT_DIR="${SPLIT_DIR:-}"
 MANIFEST_DIR="${MANIFEST_DIR:-str/manifest}"
 LIGAND_PARSE_LIMIT="${LIGAND_PARSE_LIMIT:--1}"
 
@@ -25,7 +25,7 @@ Options:
 Defaults can also be edited in this script or provided as environment variables:
   SPLIT_NAME=split
   SOURCE_CSV=data/processed/<SPLIT_NAME>/pdbbind_sequence_cluster_splits.csv
-  SPLIT_DIR=str/split_sequence_cluster_all_raw
+  SPLIT_DIR=str/splits/<SPLIT_NAME>
   MANIFEST_DIR=str/manifest
   LIGAND_PARSE_LIMIT=-1
 EOF
@@ -86,6 +86,7 @@ if [[ ! "${SPLIT_NAME}" =~ ^[A-Za-z0-9._-]+$ ]]; then
 fi
 
 SOURCE_CSV="${SOURCE_CSV:-data/processed/${SPLIT_NAME}/pdbbind_sequence_cluster_splits.csv}"
+SPLIT_DIR="${SPLIT_DIR:-str/splits/${SPLIT_NAME}}"
 MANIFEST_CSV="${MANIFEST_CSV:-${MANIFEST_DIR}/esm_affinity_manifest.csv}"
 MANIFEST_REPORT="${MANIFEST_REPORT:-${MANIFEST_DIR}/esm_affinity_manifest_report.json}"
 MANIFEST_VALIDATION_REPORT="${MANIFEST_VALIDATION_REPORT:-${MANIFEST_DIR}/esm_affinity_manifest_validation_report.json}"

@@ -151,17 +151,12 @@ else
   exit 2
 fi
 
-if [[ "${IID_MODE}" == "true" ]]; then
-  DEFAULT_OUTPUT_SPLIT_DIR="str/split_iid_all_raw"
-else
-  DEFAULT_OUTPUT_SPLIT_DIR="str/split_sequence_cluster_all_raw"
-fi
-
 if [[ ! "${SPLIT_NAME}" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "Invalid SPLIT_NAME: ${SPLIT_NAME}. Use a single directory name with letters, numbers, dot, underscore, or hyphen." >&2
   exit 2
 fi
 
+DEFAULT_OUTPUT_SPLIT_DIR="str/splits/${SPLIT_NAME}"
 DEFAULT_OUTPUT_DIR="data/processed/${SPLIT_NAME}"
 OUTPUT_SPLIT_DIR="${OUTPUT_SPLIT_DIR_ARG:-${OUTPUT_SPLIT_DIR:-${DEFAULT_OUTPUT_SPLIT_DIR}}}"
 OUTPUT_DIR="${OUTPUT_DIR_ARG:-${OUTPUT_DIR:-${DEFAULT_OUTPUT_DIR}}}"

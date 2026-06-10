@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="${ROOT_DIR:-$(pwd)}"
 MANIFEST="${MANIFEST:-str/manifest/esm_affinity_manifest.csv}"
 TRAINABLE_MANIFEST="${TRAINABLE_MANIFEST:-str/manifest/esm_affinity_trainable_manifest.csv}"
-SPLIT_DIR="${SPLIT_DIR:-str/split_sequence_cluster_all_raw}"
+SPLIT_DIR="${SPLIT_DIR:-str/splits/split}"
 
 MANIFEST_VALIDATION_REPORT="${MANIFEST_VALIDATION_REPORT:-str/manifest/esm_affinity_manifest_validation_report.json}"
 TRAINABLE_REPORT="${TRAINABLE_REPORT:-str/manifest/esm_affinity_trainable_manifest_report.json}"

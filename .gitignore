@@ -7,3 +7,13 @@ data/
 *.txt
 .DS_Store
 .idea/
+__pycache__/
+seq/processed/
+!seq/scripts/data/
+!seq/scripts/data/*.py
+!seq/scripts/data/README.md
+!scripts/data/
+!scripts/data/*.py
+!str/scripts/data/
+!str/scripts/data/*.py
+!str/requirements.txt

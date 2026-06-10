@@ -1,4 +1,4 @@
-"""Train a frozen-ESM baseline for protein-ligand affinity regression."""
+"""Train a frozen-ESM + ligand GNN model for affinity regression."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ from scripts.data.create_esm_manifest import display_path, project_path  # noqa:
 DEFAULT_MANIFEST = Path("str/manifest/esm_affinity_trainable_manifest.csv")
 DEFAULT_ESM_CACHE_DIR = Path("str/manifest/cache/esm_embeddings")
 DEFAULT_LIGAND_CACHE_DIR = Path("str/manifest/cache/ligand_graphs")
-DEFAULT_OUTPUT_DIR = Path("str/manifest/outputs/baseline_frozen_esm")
+DEFAULT_OUTPUT_DIR = Path("str/manifest/outputs/ligand_gnn_frozen_esm")
 
 
 def set_seed(seed: int) -> None:
@@ -85,40 +85,203 @@ def progress_bar(iterable, desc: str, unit: str):
     )
 
 
-def ligand_mean_pool(atom_features: torch.Tensor, ligand_batch: torch.Tensor, batch_size: int) -> torch.Tensor:
-    feature_dim = atom_features.shape[-1]
-    pooled = atom_features.new_zeros((batch_size, feature_dim))
-    pooled.index_add_(0, ligand_batch, atom_features)
-    counts = torch.bincount(ligand_batch, minlength=batch_size).to(atom_features.device).clamp_min(1)
-    return pooled / counts.unsqueeze(-1).to(atom_features.dtype)
+def global_mean_pool(node_features: torch.Tensor, graph_batch: torch.Tensor, batch_size: int) -> torch.Tensor:
+    pooled = node_features.new_zeros((batch_size, node_features.shape[-1]))
+    pooled.index_add_(0, graph_batch, node_features)
+    counts = torch.bincount(graph_batch, minlength=batch_size).to(node_features.device).clamp_min(1)
+    return pooled / counts.unsqueeze(-1).to(node_features.dtype)
 
 
-class FrozenEsmLigandBaseline(nn.Module):
+def global_max_pool(node_features: torch.Tensor, graph_batch: torch.Tensor, batch_size: int) -> torch.Tensor:
+    pooled = node_features.new_full((batch_size, node_features.shape[-1]), -torch.inf)
+    for graph_index in range(batch_size):
+        mask = graph_batch.eq(graph_index)
+        if mask.any():
+            pooled[graph_index] = node_features[mask].max(dim=0).values
+    return torch.nan_to_num(pooled, neginf=0.0)
+
+
+class AttentionPool(nn.Module):
+    def __init__(self, hidden_dim: int) -> None:
+        super().__init__()
+        self.score = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, node_features: torch.Tensor, graph_batch: torch.Tensor, batch_size: int) -> torch.Tensor:
+        scores = self.score(node_features).squeeze(-1)
+        pooled = node_features.new_zeros((batch_size, node_features.shape[-1]))
+        for graph_index in range(batch_size):
+            mask = graph_batch.eq(graph_index)
+            if not mask.any():
+                continue
+            weights = torch.softmax(scores[mask], dim=0).unsqueeze(-1)
+            pooled[graph_index] = (node_features[mask] * weights).sum(dim=0)
+        return pooled
+
+
+class GraphConvLayer(nn.Module):
+    def __init__(self, hidden_dim: int, edge_dim: int, gnn_type: str, dropout: float) -> None:
+        super().__init__()
+        self.gnn_type = gnn_type
+        self.dropout = nn.Dropout(dropout)
+        if gnn_type == "gcn":
+            self.self_linear = nn.Linear(hidden_dim, hidden_dim)
+            self.neighbor_linear = nn.Linear(hidden_dim, hidden_dim)
+            self.norm = nn.LayerNorm(hidden_dim)
+        elif gnn_type == "sage":
+            self.update = nn.Sequential(
+                nn.Linear(hidden_dim * 2, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, hidden_dim),
+            )
+            self.norm = nn.LayerNorm(hidden_dim)
+        elif gnn_type == "gine":
+            self.edge_encoder = nn.Linear(edge_dim, hidden_dim)
+            self.message_mlp = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, hidden_dim),
+            )
+            self.update = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, hidden_dim),
+            )
+            self.eps = nn.Parameter(torch.zeros(1))
+            self.norm = nn.LayerNorm(hidden_dim)
+        else:
+            raise ValueError(f"Unsupported gnn_type: {gnn_type}")
+
+    def aggregate_mean(self, messages: torch.Tensor, dst: torch.Tensor, num_nodes: int) -> torch.Tensor:
+        aggregated = messages.new_zeros((num_nodes, messages.shape[-1]))
+        aggregated.index_add_(0, dst, messages)
+        counts = torch.bincount(dst, minlength=num_nodes).to(messages.device).clamp_min(1)
+        return aggregated / counts.unsqueeze(-1).to(messages.dtype)
+
+    def forward(self, node_features: torch.Tensor, edge_index: torch.Tensor, edge_features: torch.Tensor) -> torch.Tensor:
+        if edge_index.numel() == 0:
+            residual = node_features
+            updated = self.self_linear(node_features) if self.gnn_type == "gcn" else node_features
+            return self.norm(residual + self.dropout(torch.relu(updated)))
+
+        src = edge_index[0].long()
+        dst = edge_index[1].long()
+        num_nodes = node_features.shape[0]
+
+        if self.gnn_type == "gcn":
+            messages = self.neighbor_linear(node_features[src])
+            aggregated = self.aggregate_mean(messages, dst, num_nodes)
+            updated = torch.relu(self.self_linear(node_features) + aggregated)
+        elif self.gnn_type == "sage":
+            aggregated = self.aggregate_mean(node_features[src], dst, num_nodes)
+            updated = self.update(torch.cat([node_features, aggregated], dim=-1))
+        else:
+            messages = torch.relu(node_features[src] + self.edge_encoder(edge_features))
+            messages = self.message_mlp(messages)
+            aggregated = self.aggregate_mean(messages, dst, num_nodes)
+            updated = self.update((1.0 + self.eps) * node_features + aggregated)
+
+        return self.norm(node_features + self.dropout(updated))
+
+
+class LigandGNN(nn.Module):
     def __init__(
         self,
-        protein_dim: int,
-        ligand_dim: int,
+        atom_dim: int,
+        edge_dim: int,
         hidden_dim: int,
+        layers: int,
+        gnn_type: str,
+        pooling: str,
         dropout: float,
     ) -> None:
         super().__init__()
-        self.regressor = nn.Sequential(
-            nn.Linear(protein_dim + ligand_dim, hidden_dim),
+        if layers <= 0:
+            raise ValueError("--gnn-layers must be positive")
+        self.pooling = pooling
+        self.atom_encoder = nn.Sequential(
+            nn.Linear(atom_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim),
+        )
+        self.layers = nn.ModuleList(
+            [GraphConvLayer(hidden_dim, edge_dim, gnn_type, dropout) for _ in range(layers)]
+        )
+        self.attention_pool = AttentionPool(hidden_dim) if pooling == "attention" else None
+
+    def forward(self, batch: dict[str, Any]) -> torch.Tensor:
+        node_features = self.atom_encoder(batch["ligand_atom_features"])
+        edge_index = batch["ligand_bond_index"]
+        edge_features = batch["ligand_bond_features"]
+        for layer in self.layers:
+            node_features = layer(node_features, edge_index, edge_features)
+
+        batch_size = int(batch["labels"].shape[0])
+        graph_batch = batch["ligand_batch"]
+        if self.pooling == "mean":
+            return global_mean_pool(node_features, graph_batch, batch_size)
+        if self.pooling == "max":
+            return global_max_pool(node_features, graph_batch, batch_size)
+        if self.pooling == "attention":
+            return self.attention_pool(node_features, graph_batch, batch_size)
+        raise ValueError(f"Unsupported pooling: {self.pooling}")
+
+
+class FrozenEsmLigandGNN(nn.Module):
+    def __init__(
+        self,
+        protein_dim: int,
+        atom_dim: int,
+        edge_dim: int,
+        protein_hidden_dim: int,
+        gnn_hidden_dim: int,
+        gnn_layers: int,
+        gnn_type: str,
+        pooling: str,
+        fusion_hidden_dim: int,
+        dropout: float,
+    ) -> None:
+        super().__init__()
+        self.protein_projection = nn.Sequential(
+            nn.Linear(protein_dim, protein_hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim, 1),
+        )
+        self.ligand_gnn = LigandGNN(
+            atom_dim=atom_dim,
+            edge_dim=edge_dim,
+            hidden_dim=gnn_hidden_dim,
+            layers=gnn_layers,
+            gnn_type=gnn_type,
+            pooling=pooling,
+            dropout=dropout,
+        )
+        self.ligand_projection = nn.Sequential(
+            nn.Linear(gnn_hidden_dim, fusion_hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+        )
+        self.regressor = nn.Sequential(
+            nn.Linear(protein_hidden_dim + fusion_hidden_dim, fusion_hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(fusion_hidden_dim, fusion_hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(fusion_hidden_dim, 1),
         )
 
     def forward(self, batch: dict[str, Any]) -> torch.Tensor:
         protein_vector = masked_mean_pool(batch["protein_embedding"], batch["protein_mask"])
-        ligand_vector = ligand_mean_pool(
-            batch["ligand_atom_features"],
-            batch["ligand_batch"],
-            batch_size=batch["labels"].shape[0],
-        )
+        protein_vector = self.protein_projection(protein_vector)
+        ligand_vector = self.ligand_projection(self.ligand_gnn(batch))
         fused = torch.cat([protein_vector, ligand_vector], dim=-1)
         return self.regressor(fused).squeeze(-1)
 
@@ -186,11 +349,12 @@ def build_loader(
     return loader, rows
 
 
-def infer_dims(loader: DataLoader) -> tuple[int, int]:
+def infer_dims(loader: DataLoader) -> tuple[int, int, int]:
     batch = next(iter(loader))
     protein_dim = int(batch["protein_embedding"].shape[-1])
-    ligand_dim = int(batch["ligand_atom_features"].shape[-1])
-    return protein_dim, ligand_dim
+    atom_dim = int(batch["ligand_atom_features"].shape[-1])
+    edge_dim = int(batch["ligand_bond_features"].shape[-1])
+    return protein_dim, atom_dim, edge_dim
 
 
 def train_one_epoch(
@@ -204,7 +368,7 @@ def train_one_epoch(
     model.train()
     total_loss = 0.0
     total_rows = 0
-    progress = progress_bar(loader, desc="Train batches", unit="batch")
+    progress = progress_bar(loader, desc="Train GNN batches", unit="batch")
     for batch in progress:
         batch = move_batch_to_device(batch, device)
         optimizer.zero_grad(set_to_none=True)
@@ -230,7 +394,7 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, device:
     labels_all = []
     predictions_all = []
 
-    for batch in progress_bar(loader, desc="Evaluate batches", unit="batch"):
+    for batch in progress_bar(loader, desc="Evaluate GNN batches", unit="batch"):
         batch = move_batch_to_device(batch, device)
         predictions = model(batch)
         loss = criterion(predictions, batch["labels"])
@@ -282,7 +446,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument("--hidden-dim", type=int, default=256)
+    parser.add_argument("--protein-hidden-dim", type=int, default=256)
+    parser.add_argument("--gnn-type", choices=["gcn", "sage", "gine"], default="gine")
+    parser.add_argument("--gnn-layers", type=int, default=3)
+    parser.add_argument("--gnn-hidden-dim", type=int, default=128)
+    parser.add_argument("--pooling", choices=["mean", "max", "attention"], default="mean")
+    parser.add_argument("--fusion-hidden-dim", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
@@ -342,11 +511,17 @@ def main() -> None:
         shuffle=False,
     )
 
-    protein_dim, ligand_dim = infer_dims(train_loader)
-    model = FrozenEsmLigandBaseline(
+    protein_dim, atom_dim, edge_dim = infer_dims(train_loader)
+    model = FrozenEsmLigandGNN(
         protein_dim=protein_dim,
-        ligand_dim=ligand_dim,
-        hidden_dim=args.hidden_dim,
+        atom_dim=atom_dim,
+        edge_dim=edge_dim,
+        protein_hidden_dim=args.protein_hidden_dim,
+        gnn_hidden_dim=args.gnn_hidden_dim,
+        gnn_layers=args.gnn_layers,
+        gnn_type=args.gnn_type,
+        pooling=args.pooling,
+        fusion_hidden_dim=args.fusion_hidden_dim,
         dropout=args.dropout,
     ).to(device)
     criterion = make_loss(args.loss)
@@ -356,7 +531,7 @@ def main() -> None:
     best_epoch = -1
     history = []
 
-    for epoch in progress_bar(range(1, args.epochs + 1), desc="Train epochs", unit="epoch"):
+    for epoch in progress_bar(range(1, args.epochs + 1), desc="Train GNN epochs", unit="epoch"):
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device, args.grad_clip)
         valid_metrics, _ = evaluate(model, valid_loader, criterion, device)
         epoch_record = {
@@ -380,7 +555,8 @@ def main() -> None:
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "protein_dim": protein_dim,
-                    "ligand_dim": ligand_dim,
+                    "atom_dim": atom_dim,
+                    "edge_dim": edge_dim,
                     "args": vars(args),
                 },
                 checkpoint_dir / "best.pt",
@@ -409,8 +585,14 @@ def main() -> None:
         },
         "model": {
             "protein_dim": protein_dim,
-            "ligand_dim": ligand_dim,
-            "hidden_dim": args.hidden_dim,
+            "atom_dim": atom_dim,
+            "edge_dim": edge_dim,
+            "protein_hidden_dim": args.protein_hidden_dim,
+            "gnn_type": args.gnn_type,
+            "gnn_layers": args.gnn_layers,
+            "gnn_hidden_dim": args.gnn_hidden_dim,
+            "pooling": args.pooling,
+            "fusion_hidden_dim": args.fusion_hidden_dim,
             "dropout": args.dropout,
             "loss": args.loss,
         },
