@@ -8,6 +8,8 @@ data/
 .DS_Store
 .idea/
 __pycache__/
+**/__pycache__/
+*.pyc
 seq/processed/
 !seq/scripts/data/
 !seq/scripts/data/*.py
@@ -17,3 +19,7 @@ seq/processed/
 !str/scripts/data/
 !str/scripts/data/*.py
 !str/requirements.txt
+str/manifest/
+str/output/
+str/splits/
+str/split_sequence_cluster_all_raw/

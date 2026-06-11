@@ -28,6 +28,20 @@ DEFAULT_MODEL_NAME = "facebook/esm2_t6_8M_UR50D"
 DEFAULT_MAX_RESIDUES_PER_CHUNK = 1022
 
 
+def progress_bar(iterable, desc: str, unit: str):
+    return tqdm(
+        iterable,
+        desc=desc,
+        unit=unit,
+        leave=True,
+        dynamic_ncols=True,
+        file=sys.stdout,
+        disable=False,
+        miniters=1,
+        mininterval=0.0,
+    )
+
+
 def load_transformers():
     try:
         from transformers import AutoTokenizer, EsmModel
@@ -199,22 +213,19 @@ def main() -> None:
     if args.limit >= 0:
         df = df.head(args.limit).copy()
 
+    print(f"Loading ESM tokenizer/model: {args.model_name}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, local_files_only=args.local_files_only)
     model = EsmModel.from_pretrained(args.model_name, local_files_only=args.local_files_only)
     model.eval()
     model.to(device)
+    print(f"Loaded ESM model on {device}. Caching {len(df)} rows.")
 
     written = 0
     skipped_existing = 0
     failures = []
     embedding_shapes = []
 
-    rows_iter = tqdm(
-        df.itertuples(index=False),
-        total=len(df),
-        desc="Cache ESM embeddings",
-        unit="protein",
-    )
+    rows_iter = progress_bar(df.itertuples(index=False), desc="Cache ESM embeddings", unit="protein")
     for row in rows_iter:
         output_path = cache_dir / f"{row.pdb_id}.pt"
         if output_path.exists() and not args.overwrite:

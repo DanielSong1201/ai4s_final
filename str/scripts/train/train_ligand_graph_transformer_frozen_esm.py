@@ -254,7 +254,7 @@ class LigandGraphTransformer(nn.Module):
             edge_bias = self.edge_bias(edge_features)
             attn_bias[edge_graph, :, src_local, dst_local] += edge_bias.transpose(0, 1).transpose(0, 1)
 
-        return {"node_features": node_augmented, "mask": mask, "attn_bias": attn_bias}
+        return {"node_features": node_augmented, "coordinates": coord_padded, "mask": mask, "attn_bias": attn_bias}
 
     def forward(self, batch: dict[str, Any]) -> torch.Tensor:
         packed = self.pack_graphs(batch)

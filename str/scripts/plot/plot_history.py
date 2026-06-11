@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import tempfile
@@ -60,17 +61,25 @@ def plot_history(history_csv: Path, output_png: Path, title: str) -> dict[str, o
         raise ValueError(f"{history_csv} does not contain numeric metric columns")
 
     epochs = pd.to_numeric(history["epoch"], errors="coerce")
-    fig_width = max(10.0, min(18.0, 1.2 * len(metric_columns)))
-    fig, ax = plt.subplots(figsize=(fig_width, 6.5))
-    for column in metric_columns:
+    num_metrics = len(metric_columns)
+    cols = 2 if num_metrics > 1 else 1
+    rows = int(math.ceil(num_metrics / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(7.0 * cols, 3.4 * rows), squeeze=False)
+    fig.suptitle(title)
+
+    for index, column in enumerate(metric_columns):
+        ax = axes[index // cols][index % cols]
         values = pd.to_numeric(history[column], errors="coerce")
         ax.plot(epochs, values, marker="o", markersize=3, linewidth=1.8, label=column)
+        ax.set_title(column)
+        ax.set_xlabel("epoch")
+        ax.set_ylabel(column)
+        ax.grid(True, alpha=0.25)
+        ax.legend(loc="best", fontsize=8)
 
-    ax.set_title(title)
-    ax.set_xlabel("epoch")
-    ax.set_ylabel("metric value")
-    ax.grid(True, alpha=0.25)
-    ax.legend(loc="best", fontsize=8)
+    for index in range(num_metrics, rows * cols):
+        axes[index // cols][index % cols].axis("off")
+
     fig.tight_layout()
     output_png.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_png, dpi=180)

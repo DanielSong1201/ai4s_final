@@ -74,6 +74,11 @@ RBF_MAX_DISTANCE="${RBF_MAX_DISTANCE:-20.0}"
 PROTEIN_POOLING="${PROTEIN_POOLING:-pocket_attention}"
 FALLBACK_TO_FULL_SEQUENCE="${FALLBACK_TO_FULL_SEQUENCE:-1}"
 
+SPATIAL_HIDDEN_DIM="${SPATIAL_HIDDEN_DIM:-192}"
+SPATIAL_POCKET_LAYERS="${SPATIAL_POCKET_LAYERS:-2}"
+SPATIAL_LIGAND_LAYERS="${SPATIAL_LIGAND_LAYERS:-4}"
+SPATIAL_LR="${SPATIAL_LR:-5e-4}"
+
 PLOT_DIR="${PLOT_DIR:-${OUTPUT_ROOT}/plots}"
 TENSORBOARD_DIR="${TENSORBOARD_DIR:-${OUTPUT_ROOT}/tensorboard}"
 START_TENSORBOARD="${START_TENSORBOARD:-1}"
@@ -252,7 +257,7 @@ for index in "${!scale_names[@]}"; do
   esm_cache_dir="str/manifest/cache/esm_embeddings_${scale_name}"
 
   baseline_output="${OUTPUT_ROOT}/${scale_name}/baseline_frozen_esm"
-  run_stage "[${scale_name}] Train 5.5 frozen ESM baseline" \
+  run_stage "[${scale_name}] Train 4.1 frozen ESM baseline" \
     env \
       PYTHON_BIN="${PYTHON_BIN}" \
       MANIFEST="${MANIFEST}" \
@@ -270,7 +275,7 @@ for index in "${!scale_names[@]}"; do
   plot_history "baseline_frozen_esm" "${scale_name}" "${baseline_output}"
 
   gnn_output="${OUTPUT_ROOT}/${scale_name}/ligand_gnn_frozen_esm"
-  run_stage "[${scale_name}] Train 5.6 ligand GNN" \
+  run_stage "[${scale_name}] Train 4.2 ligand GNN" \
     env \
       PYTHON_BIN="${PYTHON_BIN}" \
       MANIFEST="${MANIFEST}" \
@@ -290,7 +295,7 @@ for index in "${!scale_names[@]}"; do
   plot_history "ligand_gnn_frozen_esm" "${scale_name}" "${gnn_output}"
 
   transformer_output="${OUTPUT_ROOT}/${scale_name}/ligand_graph_transformer_frozen_esm"
-  run_stage "[${scale_name}] Train 5.7 ligand Graph Transformer" \
+  run_stage "[${scale_name}] Train 4.3 ligand Graph Transformer" \
     env \
       PYTHON_BIN="${PYTHON_BIN}" \
       MANIFEST="${MANIFEST}" \
@@ -312,7 +317,7 @@ for index in "${!scale_names[@]}"; do
   plot_history "ligand_graph_transformer_frozen_esm" "${scale_name}" "${transformer_output}"
 
   pocket_output="${OUTPUT_ROOT}/${scale_name}/pocket_gnn_frozen_esm"
-  run_stage "[${scale_name}] Train 5.8 pocket-aware ligand GNN" \
+  run_stage "[${scale_name}] Train 4.4 pocket-aware ligand GNN" \
     env \
       PYTHON_BIN="${PYTHON_BIN}" \
       MANIFEST="${MANIFEST}" \
@@ -333,6 +338,30 @@ for index in "${!scale_names[@]}"; do
       GRAD_CLIP="${GRAD_CLIP}" DEVICE="${DEVICE}" PRETRAIN_CHECK_LIMIT="${PRETRAIN_CHECK_LIMIT}" \
     bash str/scripts/run_pocket_gnn_baseline.sh
   plot_history "pocket_gnn_frozen_esm" "${scale_name}" "${pocket_output}"
+
+  spatial_output="${OUTPUT_ROOT}/${scale_name}/spatial_pocket_interaction_frozen_esm"
+  run_stage "[${scale_name}] Train 4.5 spatial pocket-ligand interaction" \
+    env \
+      PYTHON_BIN="${PYTHON_BIN}" \
+      MANIFEST="${MANIFEST}" \
+      ESM_CACHE_DIR="${esm_cache_dir}" \
+      LIGAND_CACHE_DIR="${LIGAND_CACHE_DIR}" \
+      POCKET_CACHE_DIR="${POCKET_CACHE_DIR}" \
+      OUTPUT_DIR="${spatial_output}" \
+      TRAIN_SPLIT="${TRAIN_SPLIT}" VALID_SPLIT="${VALID_SPLIT}" TEST_SPLIT="${TEST_SPLIT}" \
+      TRAIN_LIMIT="${TRAIN_LIMIT}" VALID_LIMIT="${VALID_LIMIT}" TEST_LIMIT="${TEST_LIMIT}" \
+      SAMPLE_MODE="${SAMPLE_MODE}" SEED="${SEED}" \
+      EPOCHS="${EPOCHS}" BATCH_SIZE="${BATCH_SIZE}" NUM_WORKERS="${NUM_WORKERS}" \
+      HIDDEN_DIM="${SPATIAL_HIDDEN_DIM}" POCKET_LAYERS="${SPATIAL_POCKET_LAYERS}" \
+      LIGAND_LAYERS="${SPATIAL_LIGAND_LAYERS}" ATTENTION_HEADS="${ATTENTION_HEADS}" \
+      FFN_MULTIPLIER="${FFN_MULTIPLIER}" POOLING="${TRANSFORMER_POOLING}" \
+      RBF_BINS="${RBF_BINS}" RBF_MAX_DISTANCE="${RBF_MAX_DISTANCE}" \
+      FUSION_HIDDEN_DIM="${FUSION_HIDDEN_DIM}" DROPOUT="${DROPOUT}" LR="${SPATIAL_LR}" \
+      WEIGHT_DECAY="${WEIGHT_DECAY}" LOSS="${LOSS}" GRAD_CLIP="${GRAD_CLIP}" \
+      DEVICE="${DEVICE}" FALLBACK_TO_FULL_SEQUENCE="${FALLBACK_TO_FULL_SEQUENCE}" \
+      PRETRAIN_CHECK_LIMIT="${PRETRAIN_CHECK_LIMIT}" \
+    bash str/scripts/run_spatial_pocket_interaction.sh
+  plot_history "spatial_pocket_interaction_frozen_esm" "${scale_name}" "${spatial_output}"
 done
 
 start_tensorboard
