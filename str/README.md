@@ -569,14 +569,12 @@ PYTHONPATH=$(pwd) bash str/scripts/run_spatial_pocket_interaction.sh
 
 ## 6. 最后结果
 
-当前已经完成 4.1-4.4 在 8M 与 150M ESM 基模下的训练。结果来自各实验目录中的 `metrics.json`：
+当前已经完成 4.1-4.5 在 8M 与 150M ESM 基模下的训练。结果来自各实验目录中的 `metrics.json`：
 
 ```text
 str/output/8m/<model>/metrics.json
 str/output/150m/<model>/metrics.json
 ```
-
-4.5 `spatial_pocket_interaction_frozen_esm` 的训练结果当前尚未出现在 `str/output` 下，因此本节暂不纳入 4.5。
 
 ### 6.1 测试集结果
 
@@ -586,33 +584,42 @@ str/output/150m/<model>/metrics.json
 | 8M | ligand_gnn_frozen_esm | 2.1437 | 1.7188 | -0.2044 | 0.1515 | 0.1768 |
 | 8M | ligand_graph_transformer_frozen_esm | 1.7431 | 1.4179 | 0.2037 | 0.4919 | 0.4541 |
 | 8M | pocket_gnn_frozen_esm | 1.8355 | 1.4871 | 0.1170 | 0.4290 | 0.4386 |
+| 8M | spatial_pocket_interaction_frozen_esm | 1.7173 | 1.3715 | 0.2271 | 0.4793 | 0.4905 |
 | 150M | baseline_frozen_esm | 1.8867 | 1.5250 | 0.0671 | 0.3842 | 0.3708 |
 | 150M | ligand_gnn_frozen_esm | 1.7998 | 1.4508 | 0.1510 | 0.4509 | 0.4069 |
 | 150M | ligand_graph_transformer_frozen_esm | 1.5833 | 1.2808 | 0.3430 | 0.5967 | 0.5950 |
 | 150M | pocket_gnn_frozen_esm | 2.0361 | 1.6386 | -0.0865 | 0.2546 | 0.1480 |
+| 150M | spatial_pocket_interaction_frozen_esm | 1.6644 | 1.3525 | 0.2739 | 0.5379 | 0.5650 |
 
 ### 6.2 当前结论
 
 1. 测试集 RMSE 最低的是 `150M + ligand_graph_transformer_frozen_esm`，`Test RMSE=1.5833`，同时测试集相关性也最高，`Pearson=0.5967`，`Spearman=0.5950`。
-2. 当前结果中，Graph Transformer 明显优于简单 baseline、Ligand GNN 和 4.4 pocket-aware GNN，说明 ligand 3D 坐标、bond feature 和 pairwise distance attention bias 对任务有效。
-3. 150M ESM 并没有在所有模型上稳定优于 8M ESM，但在 Graph Transformer 上给出了最好的 test 表现，说明更大的 protein embedding 需要更强的 ligand/interaction encoder 才能稳定发挥作用。
-4. `R2` 整体偏低，测试集多数模型仍接近 `0` 或低于 `0.2`，说明模型虽然学到了一定排序信号，但对绝对亲和力数值的解释能力仍有限。当前更适合作为 frozen ESM + ligand encoder 的 baseline 对照，而不是最终高精度 affinity predictor。
+2. 4.5 `spatial_pocket_interaction_frozen_esm` 明显优于对应尺度的 4.4 pocket-aware GNN。8M 下 RMSE 从 `1.8355` 降到 `1.7173`，150M 下 RMSE 从 `2.0361` 降到 `1.6644`，说明显式 pocket-ligand 空间交互有效。
+3. 4.5 在 8M 下也优于 8M Graph Transformer 的 RMSE 和 Spearman：`RMSE=1.7173` vs `1.7431`，`Spearman=0.4905` vs `0.4541`。这说明在较小 ESM 基模下，空间 pocket-ligand cross-attention 能补充 protein 表示能力。
+4. 150M Graph Transformer 仍是总体最优模型。150M 4.5 的 RMSE 为 `1.6644`，比 150M Graph Transformer 的 `1.5833` 略差，但仍是全部模型中的第二梯队强结果，且相关性达到 `Pearson=0.5379`、`Spearman=0.5650`。
+5. 单纯的 4.4 pocket-aware GNN 表现不稳定，尤其 150M 下 `Test R2=-0.0865`。这说明仅做 pocket pooling 不足以稳定提升性能，必须进一步引入 ligand 3D 坐标、residue-ligand 距离和交互注意力。
+6. `R2` 整体仍不高，最佳为 150M Graph Transformer 的 `0.3430`。当前模型已经能学到排序信号，但绝对亲和力回归仍有较大提升空间。
 
-### 6.3 后续结果记录
+### 6.3 最终排序
 
-4.5 模型完成训练后，需要补充：
+按 `Test RMSE` 从低到高，当前前三个模型为：
+
+| Rank | ESM | Model | Test RMSE | Test Pearson | Test Spearman |
+|---:|---|---|---:|---:|---:|
+| 1 | 150M | ligand_graph_transformer_frozen_esm | 1.5833 | 0.5967 | 0.5950 |
+| 2 | 150M | spatial_pocket_interaction_frozen_esm | 1.6644 | 0.5379 | 0.5650 |
+| 3 | 8M | spatial_pocket_interaction_frozen_esm | 1.7173 | 0.4793 | 0.4905 |
+
+因此，当前推荐作为最终主结果报告的是：
 
 ```text
-str/output/8m/spatial_pocket_interaction_frozen_esm/metrics.json
-str/output/150m/spatial_pocket_interaction_frozen_esm/metrics.json
+150M ESM + ligand_graph_transformer_frozen_esm
 ```
 
-建议优先比较：
+推荐作为主要改进方向展示的是：
 
 ```text
-ligand_graph_transformer_frozen_esm
-vs
 spatial_pocket_interaction_frozen_esm
 ```
 
-核心观察指标为 `Test RMSE`、`Test Pearson` 和 `Test Spearman`。如果 4.5 能在测试集上超过 150M Graph Transformer 的 `Test RMSE=1.5833` 或 `Test Spearman=0.5950`，说明显式 pocket-ligand 空间交互带来了增益。
+因为它相对 4.4 pocket-aware GNN 有明确提升，并且在 8M 基模下超过了同尺度 Graph Transformer。
