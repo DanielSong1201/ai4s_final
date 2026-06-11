@@ -506,6 +506,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--loss", choices=["mse", "huber"], default="mse")
     parser.add_argument("--grad-clip", type=float, default=5.0)
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--resume-checkpoint", type=Path)
     return parser.parse_args()
 
 
@@ -581,8 +582,22 @@ def main() -> None:
     best_valid_rmse = float("inf")
     best_epoch = -1
     history = []
+    start_epoch = 0
+    resume_checkpoint = None
+    if args.resume_checkpoint is not None:
+        resume_path = project_path(args.resume_checkpoint)
+        resume_checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
+        model.load_state_dict(resume_checkpoint["model_state_dict"])
+        if "optimizer_state_dict" in resume_checkpoint:
+            optimizer.load_state_dict(resume_checkpoint["optimizer_state_dict"])
+        start_epoch = int(resume_checkpoint.get("epoch", 0))
+        print(f"Resumed from checkpoint: {display_path(resume_path)} at epoch {start_epoch}")
 
-    for epoch in progress_bar(range(1, args.epochs + 1), desc="Train Graph Transformer epochs", unit="epoch"):
+    for epoch in progress_bar(
+        range(start_epoch + 1, start_epoch + args.epochs + 1),
+        desc="Train Graph Transformer epochs",
+        unit="epoch",
+    ):
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device, args.grad_clip)
         valid_metrics, _ = evaluate(model, valid_loader, criterion, device)
         epoch_record = {
@@ -624,6 +639,9 @@ def main() -> None:
     metrics = {
         "status": "complete",
         "best_epoch": best_epoch,
+        "start_epoch": start_epoch,
+        "resumed_from_checkpoint": display_path(project_path(args.resume_checkpoint)) if args.resume_checkpoint else None,
+        "resumed_from_epoch": int(resume_checkpoint.get("epoch", 0)) if resume_checkpoint else None,
         "manifest": display_path(manifest_path),
         "esm_cache_dir": display_path(esm_cache_dir),
         "ligand_cache_dir": display_path(ligand_cache_dir),

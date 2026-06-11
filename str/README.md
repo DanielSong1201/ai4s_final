@@ -623,3 +623,39 @@ spatial_pocket_interaction_frozen_esm
 ```
 
 因为它相对 4.4 pocket-aware GNN 有明确提升，并且在 8M 基模下超过了同尺度 Graph Transformer。
+
+## 7. Interformer split 实验结果
+
+本节结果来自 `str/output/interformer/8m/<model>/metrics.json`，使用 Interformer-compatible split 与 8M frozen ESM embedding。各模型的样本数一致：
+
+```text
+train=16037
+valid=945
+test=356
+```
+
+### 7.1 Metrics 对比
+
+| ESM | Split | Model | Best Epoch | Valid RMSE | Valid MAE | Valid R2 | Valid Pearson | Valid Spearman | Test RMSE | Test MAE | Test R2 | Test Pearson | Test Spearman |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 8M | Interformer | baseline_frozen_esm | 50 | 1.4424 | 1.1181 | 0.3797 | 0.6205 | 0.6268 | 1.6130 | 1.3162 | 0.2033 | 0.4850 | 0.4407 |
+| 8M | Interformer | ligand_gnn_frozen_esm | 47 | 1.4368 | 1.1253 | 0.3845 | 0.6209 | 0.6267 | 1.4810 | 1.1640 | 0.3284 | 0.5940 | 0.5449 |
+| 8M | Interformer | ligand_graph_transformer_frozen_esm | 48 | 1.3488 | 1.0365 | 0.4576 | 0.6771 | 0.6748 | 1.4627 | 1.1796 | 0.3448 | 0.6044 | 0.5702 |
+| 8M | Interformer | pocket_gnn_frozen_esm | 33 | 1.3869 | 1.0426 | 0.4265 | 0.6675 | 0.6788 | 1.5493 | 1.2171 | 0.2650 | 0.5511 | 0.5507 |
+| 8M | Interformer | spatial_pocket_interaction_frozen_esm | 40 | 1.4275 | 1.0950 | 0.3924 | 0.6428 | 0.6429 | 1.4764 | 1.1701 | 0.3325 | 0.6113 | 0.5964 |
+
+### 7.2 按 Test RMSE 排序
+
+| Rank | ESM | Model | Test RMSE | Test Pearson | Test Spearman |
+|---:|---|---|---:|---:|---:|
+| 1 | 8M | ligand_graph_transformer_frozen_esm | 1.4627 | 0.6044 | 0.5702 |
+| 2 | 8M | spatial_pocket_interaction_frozen_esm | 1.4764 | 0.6113 | 0.5964 |
+| 3 | 8M | ligand_gnn_frozen_esm | 1.4810 | 0.5940 | 0.5449 |
+| 4 | 8M | pocket_gnn_frozen_esm | 1.5493 | 0.5511 | 0.5507 |
+| 5 | 8M | baseline_frozen_esm | 1.6130 | 0.4850 | 0.4407 |
+
+### 7.3 当前结论
+
+1. `ligand_graph_transformer_frozen_esm` 的测试集 RMSE 最低，`Test RMSE=1.4627`，也是当前 Interformer split 下按绝对误差排序的最优模型。
+2. `spatial_pocket_interaction_frozen_esm` 的测试集相关性最高，`Test Pearson=0.6113`，`Test Spearman=0.5964`，但 RMSE 略高于 Graph Transformer。
+3. 相比 `baseline_frozen_esm`，所有加入 ligand graph、pocket 或空间交互的模型都有明显提升，说明结构侧信息在 Interformer-compatible split 上有效。
